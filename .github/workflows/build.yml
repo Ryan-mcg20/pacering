@@ -29,18 +29,26 @@ jobs:
       run: |
         pip install buildozer cython virtualenv
 
-    - name: Install Android SDK cmdline-tools
+    - name: Set up Android SDK
       run: |
-        mkdir -p $HOME/.buildozer/android/platform/android-sdk/cmdline-tools
-        cd $HOME/.buildozer/android/platform/android-sdk/cmdline-tools
+        SDK=$HOME/.buildozer/android/platform/android-sdk
+        mkdir -p $SDK/cmdline-tools
+        cd $SDK/cmdline-tools
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
         unzip -q commandlinetools-linux-9477386_latest.zip
         mv cmdline-tools latest
-        echo "$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-        yes | $HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses
-        $HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager "platform-tools" "build-tools;33.0.0" "platforms;android-33"
+        SDKMANAGER=$SDK/cmdline-tools/latest/bin/sdkmanager
+        yes | $SDKMANAGER --licenses 2>/dev/null || true
+        $SDKMANAGER "platform-tools" "build-tools;33.0.0" "platforms;android-33" "tools"
+        mkdir -p $SDK/tools/bin
+        cp $SDK/cmdline-tools/latest/bin/sdkmanager $SDK/tools/bin/sdkmanager
 
     - name: Build APK
+      env:
+        ANDROIDSDK: /home/runner/.buildozer/android/platform/android-sdk
+        ANDROIDNDK: /home/runner/.buildozer/android/platform/android-ndk-r25b
+        ANDROIDAPI: "33"
+        ANDROIDMINAPI: "26"
       run: |
         buildozer android debug
 
