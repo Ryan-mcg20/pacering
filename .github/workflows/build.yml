@@ -33,20 +33,20 @@ jobs:
       run: |
         SDK=$HOME/.buildozer/android/platform/android-sdk
         mkdir -p $SDK/cmdline-tools
-        cd $SDK/cmdline-tools
+        cd /tmp
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-        unzip -q commandlinetools-linux-9477386_latest.zip
-        mv cmdline-tools latest
-        SDKMANAGER=$SDK/cmdline-tools/latest/bin/sdkmanager
-        yes | $SDKMANAGER --licenses 2>/dev/null || true
-        $SDKMANAGER "platform-tools" "build-tools;33.0.0" "platforms;android-33" "tools"
+        unzip -q commandlinetools-linux-9477386_latest.zip -d cmdline-tools-tmp
+        mkdir -p $SDK/cmdline-tools/latest
+        mv cmdline-tools-tmp/cmdline-tools/* $SDK/cmdline-tools/latest/
+        export PATH=$SDK/cmdline-tools/latest/bin:$PATH
+        yes | sdkmanager --sdk_root=$SDK --licenses 2>/dev/null || true
+        sdkmanager --sdk_root=$SDK "platform-tools" "build-tools;33.0.0" "platforms;android-33"
         mkdir -p $SDK/tools/bin
-        cp $SDK/cmdline-tools/latest/bin/sdkmanager $SDK/tools/bin/sdkmanager
+        ln -sf $SDK/cmdline-tools/latest/bin/sdkmanager $SDK/tools/bin/sdkmanager
 
     - name: Build APK
       env:
         ANDROIDSDK: /home/runner/.buildozer/android/platform/android-sdk
-        ANDROIDNDK: /home/runner/.buildozer/android/platform/android-ndk-r25b
         ANDROIDAPI: "33"
         ANDROIDMINAPI: "26"
       run: |
