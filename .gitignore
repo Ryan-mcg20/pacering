@@ -1,0 +1,8 @@
+.buildozer/
+bin/
+*.pyc
+__pycache__/
+*.log
+build_log.txt
+pacering_profile.json
+hr_log_*.csv
