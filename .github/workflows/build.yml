@@ -26,6 +26,13 @@ jobs:
           libtinfo5 cmake libffi-dev libssl-dev
         pip install buildozer cython virtualenv
 
+    - name: Set up Android SDK
+      run: |
+        export ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk
+        mkdir -p $ANDROID_HOME
+        buildozer android debug || true
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
+
     - name: Build APK
       run: |
         buildozer android debug
