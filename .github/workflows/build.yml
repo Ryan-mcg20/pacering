@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-20.04
 
     steps:
     - uses: actions/checkout@v3
@@ -29,26 +29,7 @@ jobs:
       run: |
         pip install buildozer cython virtualenv
 
-    - name: Set up Android SDK
-      run: |
-        SDK=$HOME/.buildozer/android/platform/android-sdk
-        mkdir -p $SDK/cmdline-tools
-        cd /tmp
-        wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-        unzip -q commandlinetools-linux-9477386_latest.zip -d cmdline-tools-tmp
-        mkdir -p $SDK/cmdline-tools/latest
-        mv cmdline-tools-tmp/cmdline-tools/* $SDK/cmdline-tools/latest/
-        export PATH=$SDK/cmdline-tools/latest/bin:$PATH
-        yes | sdkmanager --sdk_root=$SDK --licenses 2>/dev/null || true
-        sdkmanager --sdk_root=$SDK "platform-tools" "build-tools;33.0.0" "platforms;android-33"
-        mkdir -p $SDK/tools/bin
-        ln -sf $SDK/cmdline-tools/latest/bin/sdkmanager $SDK/tools/bin/sdkmanager
-
     - name: Build APK
-      env:
-        ANDROIDSDK: /home/runner/.buildozer/android/platform/android-sdk
-        ANDROIDAPI: "33"
-        ANDROIDMINAPI: "26"
       run: |
         buildozer android debug
 
