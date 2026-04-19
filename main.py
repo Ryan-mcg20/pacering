@@ -19,7 +19,10 @@ USE_SIMULATOR = False
 if USE_SIMULATOR:
     from fake_ble import FakeBLEWorker as BLEWorker
 else:
-    from bleak import BleakScanner, BleakClient
+    try:
+        from bleak import BleakScanner, BleakClient
+    except ImportError:
+        pass
     BLEWorker = None
 
 from alert_engine import AlertEngine, AlertConfig, AlertEvent
