@@ -105,7 +105,7 @@ class RealBLEWorker:
         self._running = True
         Clock.schedule_once(lambda dt: self.on_status("Scanning for Xiaomi Band..."), 0)
         devices = await BleakScanner.discover(timeout=15.0)
-        keywords = ["mi band", "xiaomi", "band 10", "mi smart band", "smart band", "miband", "mbs10"]
+        keywords = ["mi band", "xiaomi", "band 10", "mi smart band", "smart band", "miband", "mbs10", "xiaomi smart band"]
         address = None
         for d in devices:
             if d.name and any(kw in d.name.lower() for kw in keywords):
