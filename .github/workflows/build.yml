@@ -29,7 +29,7 @@ jobs:
     - name: Set up Android SDK
       run: |
         SDK=$HOME/.buildozer/android/platform/android-sdk
-        mkdir -p $SDK/tools/bin $SDK/licenses
+        mkdir -p $SDK/cmdline-tools $SDK/tools/bin $SDK/licenses
         cd /tmp
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
         unzip -q commandlinetools-linux-9477386_latest.zip -d ct
@@ -44,15 +44,34 @@ jobs:
     - name: Patch buildozer sdkmanager path
       run: |
         BPATH=$(python -c "import buildozer; import os; print(os.path.dirname(buildozer.__file__))")
-        echo "Buildozer path: $BPATH"
-        grep -n "sdkmanager" $BPATH/targets/android.py | head -20
-        sed -i 's|tools/bin/sdkmanager|cmdline-tools/latest/bin/sdkmanager|g' $BPATH/targets/android.py
-        echo "--- After patch ---"
-        grep -n "sdkmanager" $BPATH/targets/android.py | head -20
+        TARGETS=$BPATH/targets/android.py
+        python3 << 'PYEOF'
+import re, os, sys
+bpath = os.popen("python -c \"import buildozer; import os; print(os.path.dirname(buildozer.__file__))\"").read().strip()
+f = bpath + "/targets/android.py"
+content = open(f).read()
+old = """    def sdkmanager_path(self):
+        sdkmanager_path = join(
+            self.android_sdk_dir, 'tools', 'bin', 'sdkmanager')
+        if not os.path.isfile(sdkmanager_path):"""
+new = """    def sdkmanager_path(self):
+        sdkmanager_path = join(
+            self.android_sdk_dir, 'cmdline-tools', 'latest', 'bin', 'sdkmanager')
+        if not os.path.isfile(sdkmanager_path):"""
+if old in content:
+    content = content.replace(old, new)
+    open(f, 'w').write(content)
+    print("SUCCESS: patched sdkmanager path")
+else:
+    print("WARNING: pattern not found, dumping context...")
+    for i, line in enumerate(content.split('\n')):
+        if 'sdkmanager_path' in line and 'join' in line:
+            print(f"Line {i}: {line}")
+PYEOF
 
     - name: Build APK
       run: |
-        buildozer -v android debug 2>&1
+        buildozer android debug
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
