@@ -41,37 +41,11 @@ jobs:
         echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > $SDK/licenses/android-sdk-preview-license
         ln -sf $SDK/cmdline-tools/latest/bin/sdkmanager $SDK/tools/bin/sdkmanager
 
-    - name: Patch buildozer sdkmanager path
-      run: |
-        BPATH=$(python -c "import buildozer; import os; print(os.path.dirname(buildozer.__file__))")
-        TARGETS=$BPATH/targets/android.py
-        python3 << 'PYEOF'
-import re, os, sys
-bpath = os.popen("python -c \"import buildozer; import os; print(os.path.dirname(buildozer.__file__))\"").read().strip()
-f = bpath + "/targets/android.py"
-content = open(f).read()
-old = """    def sdkmanager_path(self):
-        sdkmanager_path = join(
-            self.android_sdk_dir, 'tools', 'bin', 'sdkmanager')
-        if not os.path.isfile(sdkmanager_path):"""
-new = """    def sdkmanager_path(self):
-        sdkmanager_path = join(
-            self.android_sdk_dir, 'cmdline-tools', 'latest', 'bin', 'sdkmanager')
-        if not os.path.isfile(sdkmanager_path):"""
-if old in content:
-    content = content.replace(old, new)
-    open(f, 'w').write(content)
-    print("SUCCESS: patched sdkmanager path")
-else:
-    print("WARNING: pattern not found, dumping context...")
-    for i, line in enumerate(content.split('\n')):
-        if 'sdkmanager_path' in line and 'join' in line:
-            print(f"Line {i}: {line}")
-PYEOF
+    - name: Patch buildozer
+      run: python patch_buildozer.py
 
     - name: Build APK
-      run: |
-        buildozer android debug
+      run: buildozer android debug
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
