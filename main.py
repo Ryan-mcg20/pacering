@@ -14,7 +14,7 @@ from kivy.uix.popup import Popup
 from kivy.clock import Clock
 from kivy.core.window import Window
 
-USE_SIMULATOR = False
+USE_SIMULATOR = True
 
 if USE_SIMULATOR:
     from fake_ble import FakeBLEWorker as BLEWorker
