@@ -29,7 +29,7 @@ jobs:
       run: |
         pip install buildozer cython virtualenv
 
-    - name: Set up Android SDK with correct layout
+    - name: Set up full Android SDK
       run: |
         SDK=$HOME/.buildozer/android/platform/android-sdk
         mkdir -p $SDK/cmdline-tools $SDK/tools/bin $SDK/licenses
@@ -37,13 +37,23 @@ jobs:
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
         unzip -q commandlinetools-linux-9477386_latest.zip -d ct
         mv ct/cmdline-tools $SDK/cmdline-tools/latest
-        SDKMAN=$SDK/cmdline-tools/latest/bin/sdkmanager
-        yes | $SDKMAN --sdk_root=$SDK --licenses 2>/dev/null || true
-        $SDKMAN --sdk_root=$SDK "platform-tools" "build-tools;33.0.0" "platforms;android-33"
-        cp $SDKMAN $SDK/tools/bin/sdkmanager
-        chmod +x $SDK/tools/bin/sdkmanager
+        yes | $SDK/cmdline-tools/latest/bin/sdkmanager --sdk_root=$SDK --licenses 2>/dev/null || true
+        $SDK/cmdline-tools/latest/bin/sdkmanager --sdk_root=$SDK \
+          "platform-tools" \
+          "build-tools;33.0.0" \
+          "platforms;android-33"
         echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > $SDK/licenses/android-sdk-license
         echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > $SDK/licenses/android-sdk-preview-license
+
+    - name: Patch buildozer to skip sdkmanager check
+      run: |
+        BPATH=$(python -c "import buildozer; import os; print(os.path.dirname(buildozer.__file__))")
+        TARGETS=$BPATH/targets/android.py
+        SDK=$HOME/.buildozer/android/platform/android-sdk
+        # Replace the sdkmanager path buildozer uses
+        sed -i "s|tools/bin/sdkmanager|cmdline-tools/latest/bin/sdkmanager|g" $TARGETS
+        echo "Patched buildozer android target"
+        grep "sdkmanager" $TARGETS | head -5
 
     - name: Build APK
       run: |
