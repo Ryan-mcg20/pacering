@@ -106,6 +106,9 @@ android.api = 33
 # (int) Minimum API your APK / AAB will support.
 android.minapi = 26
 
+android.sdk_path = /home/runner/.buildozer/android/platform/android-sdk
+android.build_tools_version = 33.0.2
+
 # (int) Android SDK version to use
 #android.sdk = 20
 
