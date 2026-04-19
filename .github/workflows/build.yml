@@ -12,37 +12,23 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Set up Python 3.11
+    - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.11'
+        python-version: '3.10'
 
-    - name: Install dependencies
+    - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
           git zip unzip openjdk-17-jdk autoconf libtool \
-          pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev \
-          libtinfo5 cmake libffi-dev libssl-dev build-essential
-        pip install buildozer==1.5.0 cython==0.29.33 virtualenv
+          pkg-config zlib1g-dev libncurses5-dev \
+          libncursesw5-dev libtinfo5 cmake libffi-dev \
+          libssl-dev build-essential
 
-    - name: Set up Android SDK
+    - name: Install Python dependencies
       run: |
-        SDK=$HOME/.buildozer/android/platform/android-sdk
-        mkdir -p $SDK/cmdline-tools $SDK/tools/bin $SDK/licenses
-        cd /tmp
-        wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-        unzip -q commandlinetools-linux-9477386_latest.zip -d ct
-        mkdir -p $SDK/cmdline-tools/latest
-        mv ct/cmdline-tools/* $SDK/cmdline-tools/latest/
-        yes | $SDK/cmdline-tools/latest/bin/sdkmanager --sdk_root=$SDK --licenses 2>/dev/null || true
-        $SDK/cmdline-tools/latest/bin/sdkmanager --sdk_root=$SDK "platform-tools" "build-tools;33.0.0" "platforms;android-33"
-        echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > $SDK/licenses/android-sdk-license
-        echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > $SDK/licenses/android-sdk-preview-license
-        ln -sf $SDK/cmdline-tools/latest/bin/sdkmanager $SDK/tools/bin/sdkmanager
-
-    - name: Patch buildozer
-      run: python patch_buildozer.py
+        pip install buildozer cython==0.29.33
 
     - name: Build APK
       run: buildozer android debug
