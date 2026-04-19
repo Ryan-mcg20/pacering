@@ -27,21 +27,33 @@ jobs:
           libssl-dev build-essential
 
     - name: Install Python dependencies
-      run: |
-        pip install buildozer cython==0.29.33
+      run: pip install buildozer cython==0.29.33
 
-    - name: Accept Android licenses
+    - name: Install Android SDK and sdkmanager
       run: |
-        mkdir -p $HOME/.buildozer/android/platform/android-sdk/licenses
-        echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > $HOME/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
-        echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > $HOME/.buildozer/android/platform/android-sdk/licenses/android-sdk-preview-license
+        SDK=$HOME/.buildozer/android/platform/android-sdk
+        mkdir -p $SDK/cmdline-tools
+        cd /tmp
+        wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+        unzip -q commandlinetools-linux-9477386_latest.zip
+        mkdir -p $SDK/cmdline-tools/latest
+        mv cmdline-tools/* $SDK/cmdline-tools/latest/
+        mkdir -p $SDK/tools/bin
+        ln -sf $SDK/cmdline-tools/latest/bin/sdkmanager $SDK/tools/bin/sdkmanager
+        yes | $SDK/cmdline-tools/latest/bin/sdkmanager --sdk_root=$SDK --licenses 2>/dev/null || true
+        $SDK/cmdline-tools/latest/bin/sdkmanager --sdk_root=$SDK \
+          "platform-tools" \
+          "build-tools;33.0.2" \
+          "platforms;android-33"
+
+    - name: Accept licenses
+      run: |
+        SDK=$HOME/.buildozer/android/platform/android-sdk
+        mkdir -p $SDK/licenses
+        echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > $SDK/licenses/android-sdk-license
+        echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > $SDK/licenses/android-sdk-preview-license
 
     - name: Build APK
-      env:
-        ANDROIDSDK: $HOME/.buildozer/android/platform/android-sdk
-        ANDROIDNDK: $HOME/.buildozer/android/platform/android-ndk-r25b
-        ANDROIDAPI: "33"
-        ANDROIDMINAPI: "26"
       run: buildozer android debug
 
     - name: Upload APK
