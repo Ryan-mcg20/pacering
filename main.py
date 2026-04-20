@@ -58,6 +58,18 @@ class Simulator:
 
         return int(self.bpm)
 
+from android.permissions import request_permissions, Permission
+
+def request_bt_permissions():
+    request_permissions([
+        Permission.BLUETOOTH_CONNECT,
+        Permission.BLUETOOTH_SCAN,
+        Permission.ACCESS_FINE_LOCATION
+    ])
+
+def build(self):
+    if not USE_SIMULATOR:
+        request_bt_permissions()
 # ---------------- ALERT ENGINE ----------------
 class AlertEngine:
     def __init__(self, resting, delta):
