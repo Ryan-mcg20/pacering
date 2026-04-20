@@ -1,7 +1,5 @@
 import json
 import os
-import math
-import random
 from datetime import datetime
 from collections import deque
 from typing import Optional
@@ -15,6 +13,7 @@ from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
 from kivy.uix.slider import Slider
 from kivy.uix.widget import Widget
+from kivy.uix.scrollview import ScrollView
 from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.graphics import Color, RoundedRectangle, Line, Ellipse, Mesh
@@ -30,17 +29,18 @@ else:
 
 from alert_engine import AlertEngine, AlertConfig, AlertEvent
 
+# Colours
 BG       = (0.063, 0.051, 0.102, 1)
-SURFACE  = (0.11,  0.09,  0.18,  1)
-SURFACE2 = (0.16,  0.13,  0.25,  1)
+SURFACE  = (0.13,  0.10,  0.20,  1)
+SURFACE2 = (0.18,  0.14,  0.27,  1)
 PURPLE   = (0.42,  0.17,  0.91,  1)
 FUCHSIA  = (0.91,  0.475, 0.976, 1)
 RED      = (0.957, 0.247, 0.369, 1)
 AMBER    = (0.96,  0.62,  0.04,  1)
 GREEN    = (0.30,  0.89,  0.40,  1)
-WHITE    = (0.93,  0.91,  0.99,  1)
-MUTED    = (0.42,  0.37,  0.62,  1)
-MUTED2   = (0.27,  0.23,  0.40,  1)
+WHITE    = (0.96,  0.94,  1.00,  1)
+MUTED    = (0.55,  0.48,  0.72,  1)
+DANGER_BG = (0.22, 0.05, 0.10, 1)
 
 PROFILE_FILE = "pacering_profile.json"
 
@@ -72,79 +72,51 @@ def time_greeting(name):
     return f"{prefix}, {name.lower()}"
 
 
-def paint_bg(widget, color=None, radius=16):
-    color = color or SURFACE
+def paint_bg(widget, color, radius=16):
     with widget.canvas.before:
-        Color(*color)
-        rect = RoundedRectangle(pos=widget.pos, size=widget.size, radius=[dp(radius)])
+        col = Color(*color)
+        rect = RoundedRectangle(pos=widget.pos, size=widget.size,
+                                radius=[dp(radius)])
 
-    def _update(*_):
+    def _upd(*_):
         rect.pos = widget.pos
         rect.size = widget.size
 
-    widget.bind(pos=_update, size=_update)
+    widget.bind(pos=_upd, size=_upd)
     return rect
 
 
-class PillLabel(BoxLayout):
-    def __init__(self, text, bg=None, text_color=None, **kwargs):
-        super().__init__(size_hint=(None, None), size=(dp(160), dp(28)), **kwargs)
-        paint_bg(self, bg or SURFACE2, radius=14)
-        self.lbl = Label(text=text, font_size=sp(12), color=text_color or MUTED)
-        self.add_widget(self.lbl)
-
-    def set_text(self, text, color=None):
-        self.lbl.text = text
-        if color:
-            self.lbl.color = color
-
-
-class StatCard(BoxLayout):
-    def __init__(self, title, value, unit="", **kwargs):
-        super().__init__(orientation="vertical", padding=[dp(10), dp(8)], **kwargs)
-        paint_bg(self, SURFACE, radius=14)
-        self.val_lbl = Label(
-            text=value, font_size=sp(19), bold=True, color=WHITE,
-            size_hint_y=None, height=dp(30),
-        )
-        self.title_lbl = Label(
-            text=title + ("  " + unit if unit else ""),
-            font_size=sp(11), color=MUTED,
-            size_hint_y=None, height=dp(16),
-        )
-        self.add_widget(self.val_lbl)
-        self.add_widget(self.title_lbl)
-
-    def update(self, value, color=None):
-        self.val_lbl.text = str(value)
-        if color:
-            self.val_lbl.color = color
-
+# ---------------------------------------------------------------------------
+# Shared widgets
+# ---------------------------------------------------------------------------
 
 class StyledInput(TextInput):
+    """Visible text input that works on Android."""
     def __init__(self, hint="", default="", numeric=False, **kwargs):
         super().__init__(
             hint_text=hint,
             text=str(default),
             multiline=False,
-            font_size=sp(17),
+            font_size=sp(18),
+            # Solid dark background so cursor + text are visible
+            background_normal="",
+            background_active="",
+            background_color=SURFACE2,
             foreground_color=WHITE,
-            background_color=(0, 0, 0, 0),
-            hint_text_color=(*MUTED[:3], 0.7),
+            hint_text_color=(*MUTED[:3], 0.8),
             cursor_color=FUCHSIA,
-            selection_color=(*PURPLE[:3], 0.4),
-            padding=[dp(18), dp(14)],
+            selection_color=(*PURPLE[:3], 0.45),
+            padding=[dp(16), dp(14)],
             size_hint_y=None,
             height=dp(54),
             **kwargs,
         )
         if numeric:
             self.input_filter = "int"
-        paint_bg(self, SURFACE2, radius=12)
 
 
 class PurpleButton(Button):
-    def __init__(self, text, secondary=False, danger=False, **kwargs):
+    def __init__(self, text, danger=False, secondary=False, **kwargs):
         super().__init__(
             text=text,
             font_size=sp(16),
@@ -156,14 +128,34 @@ class PurpleButton(Button):
             height=dp(54),
             **kwargs,
         )
-        if danger:
-            bg = RED
-        elif secondary:
-            bg = SURFACE2
-        else:
-            bg = PURPLE
-        paint_bg(self, bg, radius=14)
-        self.bind(state=lambda i, s: setattr(self, "color", (*PURPLE[:3], 1) if s == "down" else WHITE))
+        self._bg = RED if danger else (SURFACE2 if secondary else PURPLE)
+        paint_bg(self, self._bg, radius=14)
+        self.bind(state=lambda i, s: setattr(
+            self, "color", (*FUCHSIA[:3], 1) if s == "down" else WHITE
+        ))
+
+
+class StatCard(BoxLayout):
+    def __init__(self, title, value, unit="", **kwargs):
+        super().__init__(orientation="vertical",
+                         padding=[dp(10), dp(10)], **kwargs)
+        paint_bg(self, SURFACE, radius=14)
+        self.val_lbl = Label(
+            text=value, font_size=sp(20), bold=True, color=WHITE,
+            size_hint_y=None, height=dp(32),
+        )
+        self.title_lbl = Label(
+            text=title + ("  " + unit if unit else ""),
+            font_size=sp(11), color=MUTED,
+            size_hint_y=None, height=dp(18),
+        )
+        self.add_widget(self.val_lbl)
+        self.add_widget(self.title_lbl)
+
+    def update(self, value, color=None):
+        self.val_lbl.text = str(value)
+        if color:
+            self.val_lbl.color = color
 
 
 class ECGGraph(Widget):
@@ -193,18 +185,23 @@ class ECGGraph(Widget):
             y = y0 + ((v - lo) / (hi - lo)) * h
             coords += [x, y]
         with self.canvas:
-            Color(*PURPLE[:3], 0.15)
+            Color(*PURPLE[:3], 0.18)
             fv = [x0, y0, 0, 0]
             for i in range(0, len(coords), 2):
                 fv += [coords[i], coords[i + 1], 0, 0]
             fv += [coords[-2], y0, 0, 0]
-            Mesh(vertices=fv, indices=list(range(len(fv) // 4)), mode="triangle_fan")
+            Mesh(vertices=fv, indices=list(range(len(fv) // 4)),
+                 mode="triangle_fan")
             Color(*PURPLE)
-            Line(points=coords, width=dp(1.5), cap="round", joint="round")
+            Line(points=coords, width=dp(2), cap="round", joint="round")
             Color(*FUCHSIA)
-            r = dp(4)
+            r = dp(5)
             Ellipse(pos=(coords[-2] - r, coords[-1] - r), size=(r * 2, r * 2))
 
+
+# ---------------------------------------------------------------------------
+# Onboarding
+# ---------------------------------------------------------------------------
 
 class OnboardScreen(Screen):
     def __init__(self, **kwargs):
@@ -212,75 +209,96 @@ class OnboardScreen(Screen):
         self._data = {}
         self._build_step1()
 
-    def _base(self):
+    def _fresh(self):
         self.clear_widgets()
-        l = BoxLayout(
+        sv = ScrollView(size_hint=(1, 1))
+        inner = BoxLayout(
             orientation="vertical",
-            padding=[dp(32), dp(60), dp(32), dp(40)],
-            spacing=dp(16),
+            padding=[dp(32), dp(56), dp(32), dp(40)],
+            spacing=dp(18),
+            size_hint_y=None,
         )
-        self.add_widget(l)
-        return l
+        inner.bind(minimum_height=inner.setter("height"))
+        sv.add_widget(inner)
+        self.add_widget(sv)
+        return inner
 
-    def _header(self, l, step, title, sub):
+    def _step_header(self, l, step, title, sub):
         l.add_widget(Label(
             text=f"step {step} of 3", font_size=sp(13), color=FUCHSIA,
-            size_hint_y=None, height=dp(22), halign="left",
+            size_hint_y=None, height=dp(24), halign="left",
         ))
-        l.add_widget(Label(
-            text=title, font_size=sp(26), bold=True, color=WHITE,
-            size_hint_y=None, height=dp(44), halign="left",
-        ))
+        lbl = Label(
+            text=title, font_size=sp(28), bold=True, color=WHITE,
+            size_hint_y=None, height=dp(56), halign="left",
+            text_size=(Window.width - dp(64), None),
+        )
+        l.add_widget(lbl)
         l.add_widget(Label(
             text=sub, font_size=sp(14), color=MUTED,
-            size_hint_y=None, height=dp(22), halign="left",
+            size_hint_y=None, height=dp(24), halign="left",
         ))
 
+    # Step 1
     def _build_step1(self):
-        l = self._base()
+        l = self._fresh()
         l.add_widget(Label(
-            text="PaceRing", font_size=sp(34), bold=True, color=FUCHSIA,
-            size_hint_y=None, height=dp(52),
+            text="PaceRing", font_size=sp(36), bold=True, color=FUCHSIA,
+            size_hint_y=None, height=dp(56),
         ))
-        self._header(l, 1, "what's your name?", "so we can make this feel like yours")
-        self.name_input = StyledInput(hint="your name")
-        l.add_widget(self.name_input)
-        l.add_widget(Widget())
+        self._step_header(l, 1, "what's your name?",
+                          "so we can make this feel like yours")
+        l.add_widget(Label(
+            text="your name", font_size=sp(12), color=MUTED,
+            size_hint_y=None, height=dp(20), halign="left",
+        ))
+        self.name_inp = StyledInput(hint="e.g. Ryan")
+        l.add_widget(self.name_inp)
+        l.add_widget(Widget(size_hint_y=None, height=dp(20)))
         btn = PurpleButton("continue")
         btn.bind(on_press=self._s1)
         l.add_widget(btn)
 
     def _s1(self, *_):
-        self._data["name"] = self.name_input.text.strip() or "friend"
+        self._data["name"] = self.name_inp.text.strip() or "friend"
         self._build_step2()
 
+    # Step 2
     def _build_step2(self):
-        l = self._base()
-        self._header(l, 2, "your resting\nheart rate", "used to detect spikes accurately")
-        row = BoxLayout(size_hint_y=None, height=dp(80), spacing=dp(40))
-        self._rv = Label(text="65", font_size=sp(44), bold=True, color=PURPLE)
-        self._tv = Label(text="115", font_size=sp(44), bold=True, color=FUCHSIA)
+        l = self._fresh()
+        self._step_header(l, 2, "your resting\nheart rate",
+                          "used to detect spikes accurately")
+        row = BoxLayout(size_hint_y=None, height=dp(90), spacing=dp(40))
+        self._rv = Label(text="65", font_size=sp(48), bold=True, color=PURPLE)
+        self._tv = Label(text="115", font_size=sp(48), bold=True, color=FUCHSIA)
         row.add_widget(self._rv)
         row.add_widget(self._tv)
         l.add_widget(row)
-        lr = BoxLayout(size_hint_y=None, height=dp(20))
+        lr = BoxLayout(size_hint_y=None, height=dp(22))
         lr.add_widget(Label(text="resting BPM", font_size=sp(12), color=MUTED))
         lr.add_widget(Label(text="alert above", font_size=sp(12), color=MUTED))
         l.add_widget(lr)
-        self._sl2 = Slider(min=40, max=100, value=65, step=1, size_hint_y=None, height=dp(50))
+        self._sl2 = Slider(min=40, max=100, value=65, step=1,
+                           size_hint_y=None, height=dp(52))
         self._sl2.bind(value=lambda i, v: (
             setattr(self._rv, "text", str(int(v))),
             setattr(self._tv, "text", str(int(v) + 50)),
         ))
         l.add_widget(self._sl2)
-        l.add_widget(Label(text="drag to set your resting BPM", font_size=sp(12), color=MUTED, size_hint_y=None, height=dp(20)))
-        l.add_widget(Widget())
+        l.add_widget(Label(
+            text="drag to set your resting BPM",
+            font_size=sp(12), color=MUTED,
+            size_hint_y=None, height=dp(22),
+        ))
+        l.add_widget(Widget(size_hint_y=None, height=dp(16)))
         btn = PurpleButton("continue")
         btn.bind(on_press=self._s2)
         l.add_widget(btn)
-        skip = Button(text="use defaults", font_size=sp(13), color=MUTED,
-                      background_normal="", background_color=(0, 0, 0, 0),
-                      size_hint_y=None, height=dp(36))
+        skip = Button(
+            text="use defaults", font_size=sp(13), color=MUTED,
+            background_normal="", background_color=(0, 0, 0, 0),
+            size_hint_y=None, height=dp(40),
+        )
         skip.bind(on_press=self._s2)
         l.add_widget(skip)
 
@@ -289,76 +307,114 @@ class OnboardScreen(Screen):
         self._data["threshold"] = int(self._sl2.value) + 50
         self._build_step3()
 
+    # Step 3
     def _build_step3(self):
-        l = self._base()
-        self._header(l, 3, "spike sensitivity", "how fast does your HR rise in episodes?")
-        self._splbl = Label(text="+30 BPM", font_size=sp(40), bold=True, color=FUCHSIA,
-                            size_hint_y=None, height=dp(64))
+        l = self._fresh()
+        self._step_header(l, 3, "spike sensitivity",
+                          "how fast does your HR rise in episodes?")
+        self._splbl = Label(
+            text="+30 BPM", font_size=sp(42), bold=True, color=FUCHSIA,
+            size_hint_y=None, height=dp(68),
+        )
         l.add_widget(self._splbl)
-        sp_sl = Slider(min=15, max=60, value=30, step=5, size_hint_y=None, height=dp(48))
-        sp_sl.bind(value=lambda i, v: setattr(self._splbl, "text", f"+{int(v)} BPM"))
+        sp_sl = Slider(min=15, max=60, value=30, step=5,
+                       size_hint_y=None, height=dp(52))
+        sp_sl.bind(value=lambda i, v: setattr(self._splbl, "text",
+                                              f"+{int(v)} BPM"))
         l.add_widget(sp_sl)
-        self._durlbl = Label(text="alert after  10 s", font_size=sp(15), color=WHITE,
-                             size_hint_y=None, height=dp(32))
+        self._durlbl = Label(
+            text="alert after  10 s", font_size=sp(15), color=WHITE,
+            size_hint_y=None, height=dp(34),
+        )
         l.add_widget(self._durlbl)
-        dur_sl = Slider(min=5, max=30, value=10, step=5, size_hint_y=None, height=dp(48))
-        dur_sl.bind(value=lambda i, v: setattr(self._durlbl, "text", f"alert after  {int(v)} s"))
+        dur_sl = Slider(min=5, max=30, value=10, step=5,
+                        size_hint_y=None, height=dp(52))
+        dur_sl.bind(value=lambda i, v: setattr(self._durlbl, "text",
+                                               f"alert after  {int(v)} s"))
         l.add_widget(dur_sl)
-        l.add_widget(Widget())
+        l.add_widget(Widget(size_hint_y=None, height=dp(20)))
         btn = PurpleButton("start monitoring")
-        btn.bind(on_press=lambda *_: self._finish(int(sp_sl.value), int(dur_sl.value)))
+        btn.bind(on_press=lambda *_: self._finish(int(sp_sl.value),
+                                                  int(dur_sl.value)))
         l.add_widget(btn)
 
     def _finish(self, spike, dur):
         self._data["spike_delta"] = spike
         self._data["sustained_secs"] = dur
         save_profile(self._data)
-        App.get_running_app().launch_monitor(self._data)
+        App.get_running_app().launch_monitor()
 
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
 
 class SettingsScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(name="settings", **kwargs)
+        self._fields = {}
         self._build()
 
     def _build(self):
-        root = BoxLayout(orientation="vertical",
-                         padding=[dp(28), dp(56), dp(28), dp(32)], spacing=dp(14))
-        hdr = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(12))
-        back = Button(text="←", font_size=sp(22),
-                      background_normal="", background_color=(0, 0, 0, 0),
-                      color=FUCHSIA, size_hint_x=None, width=dp(44))
+        sv = ScrollView(size_hint=(1, 1))
+        root = BoxLayout(
+            orientation="vertical",
+            padding=[dp(28), dp(56), dp(28), dp(32)],
+            spacing=dp(14),
+            size_hint_y=None,
+        )
+        root.bind(minimum_height=root.setter("height"))
+
+        hdr = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(12))
+        back = Button(
+            text="<", font_size=sp(22),
+            background_normal="", background_color=(0, 0, 0, 0),
+            color=FUCHSIA, size_hint_x=None, width=dp(48),
+        )
         back.bind(on_press=lambda *_: setattr(self.manager, "current", "monitor"))
         hdr.add_widget(back)
-        hdr.add_widget(Label(text="settings", font_size=sp(22), bold=True, color=WHITE, halign="left"))
+        hdr.add_widget(Label(
+            text="settings", font_size=sp(24), bold=True, color=WHITE,
+            halign="left",
+        ))
         root.add_widget(hdr)
-        root.add_widget(Widget(size_hint_y=None, height=dp(8)))
-        self._fields = {}
+        root.add_widget(Widget(size_hint_y=None, height=dp(10)))
+
         for key, label, num in [
-            ("name", "your name", False),
-            ("resting_hr", "resting HR (BPM)", True),
-            ("threshold", "alert threshold (BPM)", True),
-            ("spike_delta", "spike delta (+BPM)", True),
-            ("sustained_secs", "sustained duration (s)", True),
+            ("name",           "your name",             False),
+            ("resting_hr",     "resting HR (BPM)",      True),
+            ("threshold",      "alert threshold (BPM)", True),
+            ("spike_delta",    "spike delta (+BPM)",    True),
+            ("sustained_secs", "sustained duration (s)",True),
         ]:
-            root.add_widget(Label(text=label, font_size=sp(12), color=MUTED,
-                                  size_hint_y=None, height=dp(20), halign="left"))
+            root.add_widget(Label(
+                text=label, font_size=sp(13), color=MUTED,
+                size_hint_y=None, height=dp(22), halign="left",
+            ))
             inp = StyledInput(hint=label, numeric=num)
             self._fields[key] = inp
             root.add_widget(inp)
-        root.add_widget(Widget())
+
+        root.add_widget(Widget(size_hint_y=None, height=dp(24)))
+
         save_btn = PurpleButton("save changes")
         save_btn.bind(on_press=self._save)
         root.add_widget(save_btn)
+
+        root.add_widget(Widget(size_hint_y=None, height=dp(10)))
+
         reset_btn = PurpleButton("reset profile", danger=True)
         reset_btn.bind(on_press=self._reset)
         root.add_widget(reset_btn)
-        self.add_widget(root)
+
+        sv.add_widget(root)
+        self.add_widget(sv)
 
     def on_enter(self):
         p = load_profile() or {}
         for key, inp in self._fields.items():
-            inp.text = str(p.get(key, ""))
+            val = p.get(key, "")
+            inp.text = str(val) if val != "" else ""
 
     def _save(self, *_):
         p = load_profile() or {}
@@ -373,6 +429,10 @@ class SettingsScreen(Screen):
         App.get_running_app().stop()
 
 
+# ---------------------------------------------------------------------------
+# Monitor
+# ---------------------------------------------------------------------------
+
 class MonitorScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(name="monitor", **kwargs)
@@ -381,88 +441,105 @@ class MonitorScreen(Screen):
         self._build_ui()
 
     def _build_ui(self):
-        root = FloatLayout()
         col = BoxLayout(
             orientation="vertical",
             padding=[dp(24), dp(52), dp(24), dp(24)],
-            spacing=dp(12),
-            size_hint=(1, 1),
+            spacing=dp(14),
         )
 
-        # Greeting + gear
+        # Greeting row
         top = BoxLayout(size_hint_y=None, height=dp(44))
         self.greeting_lbl = Label(
-            text="", font_size=sp(14), color=MUTED,
-            halign="left", valign="middle", size_hint_x=0.85,
+            text="", font_size=sp(15), color=MUTED,
+            halign="left", valign="middle", size_hint_x=0.82,
         )
-        self.greeting_lbl.bind(size=lambda w, _: setattr(w, "text_size", w.size))
+        self.greeting_lbl.bind(
+            size=lambda w, _: setattr(w, "text_size", w.size))
         top.add_widget(self.greeting_lbl)
-        gear = Button(text="☰", font_size=sp(18),
-                      background_normal="", background_color=(0, 0, 0, 0),
-                      color=FUCHSIA, size_hint=(None, None), size=(dp(40), dp(40)))
-        gear.bind(on_press=lambda *_: setattr(self.manager, "current", "settings"))
+        gear = Button(
+            text="=", font_size=sp(22),
+            background_normal="", background_color=(0, 0, 0, 0),
+            color=FUCHSIA, size_hint=(None, None), size=(dp(44), dp(44)),
+        )
+        gear.bind(on_press=lambda *_: setattr(self.manager, "current",
+                                              "settings"))
         top.add_widget(gear)
         col.add_widget(top)
 
         # Status pill
-        self.status_pill = PillLabel("not connected", bg=SURFACE2, text_color=MUTED)
-        sr = BoxLayout(size_hint_y=None, height=dp(32))
-        sr.add_widget(self.status_pill)
-        sr.add_widget(Widget())
-        col.add_widget(sr)
+        self.status_box = BoxLayout(size_hint_y=None, height=dp(30))
+        paint_bg(self.status_box, SURFACE2, radius=15)
+        self.status_lbl = Label(
+            text="not connected", font_size=sp(12), color=MUTED,
+        )
+        self.status_box.add_widget(self.status_lbl)
+        anchor = BoxLayout(size_hint_y=None, height=dp(34))
+        anchor.add_widget(self.status_box)
+        anchor.add_widget(Widget())
+        col.add_widget(anchor)
 
         # BPM
-        bpm_box = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(108))
-        self.bpm_lbl = Label(text="--", font_size=sp(80), bold=True, color=WHITE,
-                             size_hint_y=None, height=dp(88))
-        self.bpm_unit = Label(text="BPM", font_size=sp(14), color=MUTED,
-                              size_hint_y=None, height=dp(20))
-        bpm_box.add_widget(self.bpm_lbl)
-        bpm_box.add_widget(self.bpm_unit)
-        col.add_widget(bpm_box)
+        bpm_col = BoxLayout(orientation="vertical",
+                            size_hint_y=None, height=dp(116))
+        self.bpm_lbl = Label(
+            text="--", font_size=sp(80), bold=True, color=WHITE,
+            size_hint_y=None, height=dp(94),
+        )
+        self.bpm_unit_lbl = Label(
+            text="BPM", font_size=sp(14), color=MUTED,
+            size_hint_y=None, height=dp(22),
+        )
+        bpm_col.add_widget(self.bpm_lbl)
+        bpm_col.add_widget(self.bpm_unit_lbl)
+        col.add_widget(bpm_col)
 
         # HRV
-        self.hrv_lbl = Label(text="HRV  —", font_size=sp(14), color=FUCHSIA,
-                             size_hint_y=None, height=dp(22))
+        self.hrv_lbl = Label(
+            text="HRV  --", font_size=sp(14), color=FUCHSIA,
+            size_hint_y=None, height=dp(24),
+        )
         col.add_widget(self.hrv_lbl)
 
-        # Graph
-        gc = BoxLayout(size_hint_y=None, height=dp(88), padding=dp(10))
+        # Graph card
+        gc = BoxLayout(size_hint_y=None, height=dp(92), padding=dp(10))
         paint_bg(gc, SURFACE, radius=16)
         self.graph = ECGGraph()
         gc.add_widget(self.graph)
         col.add_widget(gc)
 
-        # Stats
-        stats = BoxLayout(size_hint_y=None, height=dp(76), spacing=dp(10))
-        self.card_rest = StatCard("resting", "--", "BPM")
-        self.card_hrv = StatCard("avg HRV", "--", "ms")
+        # Stat cards
+        stats = BoxLayout(size_hint_y=None, height=dp(80), spacing=dp(10))
+        self.card_rest   = StatCard("resting",  "--", "BPM")
+        self.card_hrv    = StatCard("avg HRV",  "--", "ms")
         self.card_status = StatCard("status", "idle")
-        stats.add_widget(self.card_rest)
-        stats.add_widget(self.card_hrv)
-        stats.add_widget(self.card_status)
+        for c in [self.card_rest, self.card_hrv, self.card_status]:
+            stats.add_widget(c)
         col.add_widget(stats)
 
-        # Alert card
+        # Alert card (hidden)
         self.alert_card = BoxLayout(
-            orientation="vertical", size_hint_y=None, height=0,
+            orientation="vertical",
+            size_hint_y=None, height=0,
             padding=[dp(16), dp(0)], opacity=0,
         )
-        paint_bg(self.alert_card, (0.22, 0.05, 0.10, 1), radius=16)
-        self.alert_lbl = Label(text="", font_size=sp(13), color=(1, 0.55, 0.60, 1),
-                               halign="center", valign="middle")
-        self.alert_lbl.bind(size=lambda w, _: setattr(w, "text_size", (w.width - dp(24), None)))
+        paint_bg(self.alert_card, DANGER_BG, radius=16)
+        self.alert_lbl = Label(
+            text="", font_size=sp(13), color=(1, 0.55, 0.60, 1),
+            halign="center", valign="middle",
+        )
+        self.alert_lbl.bind(
+            size=lambda w, _: setattr(
+                w, "text_size", (w.width - dp(24), None)))
         self.alert_card.add_widget(self.alert_lbl)
         col.add_widget(self.alert_card)
 
-        # Connect button
+        # Spacer + connect button
         col.add_widget(Widget())
         self.connect_btn = PurpleButton("connect to band")
         self.connect_btn.bind(on_press=self._start)
         col.add_widget(self.connect_btn)
 
-        root.add_widget(col)
-        self.add_widget(root)
+        self.add_widget(col)
 
     def on_enter(self):
         p = load_profile()
@@ -496,23 +573,20 @@ class MonitorScreen(Screen):
         self.ble_worker.start()
 
     def _on_status(self, txt):
-        self.status_pill.set_text(txt)
-        connected = any(x in txt.lower() for x in ["connected", "simulator", "monitoring"])
-        self.status_pill.lbl.color = GREEN if connected else MUTED
-        if connected:
+        self.status_lbl.text = txt
+        ok = any(x in txt.lower()
+                 for x in ["connected", "simulator", "monitoring"])
+        self.status_lbl.color = GREEN if ok else MUTED
+        if ok:
             self.card_status.update("live", GREEN)
 
     def _on_bpm(self, bpm, rmssd):
         self.bpm_lbl.text = str(bpm)
         self.graph.push(bpm)
-        if bpm < 90:
-            c = WHITE
-        elif bpm < 110:
-            c = AMBER
-        else:
-            c = RED
+        c = WHITE if bpm < 90 else (AMBER if bpm < 110 else RED)
         self.bpm_lbl.color = c
-        anim = Animation(font_size=sp(84), duration=0.08) + Animation(font_size=sp(80), duration=0.18)
+        anim = (Animation(font_size=sp(84), duration=0.08) +
+                Animation(font_size=sp(80), duration=0.18))
         anim.start(self.bpm_lbl)
         if rmssd:
             self.hrv_lbl.text = f"HRV  {rmssd:.0f} ms"
@@ -522,9 +596,9 @@ class MonitorScreen(Screen):
 
     def _on_alert(self, alert):
         self._alert_up = True
-        self.alert_lbl.text = f"  {alert.message}"
+        self.alert_lbl.text = f"! {alert.message}"
         self.alert_card.opacity = 1
-        Animation(height=dp(88), duration=0.3).start(self.alert_card)
+        Animation(height=dp(90), duration=0.3).start(self.alert_card)
         self.card_status.update("ALERT", RED)
         try:
             from plyer import vibrator
@@ -538,25 +612,29 @@ class MonitorScreen(Screen):
         Animation(height=0, opacity=0, duration=0.22).start(self.alert_card)
 
 
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
+
 class PaceRingApp(App):
     def build(self):
         Window.clearcolor = BG
         self.sm = ScreenManager(transition=FadeTransition(duration=0.2))
         p = load_profile()
         if p:
-            self._add_screens()
+            self._add_main_screens()
             self.sm.current = "monitor"
         else:
             self.sm.add_widget(OnboardScreen())
             self.sm.current = "onboard"
         return self.sm
 
-    def launch_monitor(self, profile):
-        self._add_screens()
+    def launch_monitor(self):
+        self._add_main_screens()
         self.sm.transition = SlideTransition(direction="left")
         self.sm.current = "monitor"
 
-    def _add_screens(self):
+    def _add_main_screens(self):
         if not self.sm.has_screen("monitor"):
             self.sm.add_widget(MonitorScreen())
         if not self.sm.has_screen("settings"):
