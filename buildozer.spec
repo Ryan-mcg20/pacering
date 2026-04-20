@@ -5,11 +5,12 @@ package.domain = org.neil.pots
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,wav
 version = 0.1
-requirements = python3,kivy,bleak,plyer,android
+requirements = python3, kivy, plyer, bleak, aiosqlite
+
 orientation = portrait
 fullscreen = 0
 
-android.permissions = BLUETOOTH,BLUETOOTH_ADMIN,BLUETOOTH_SCAN,BLUETOOTH_CONNECT,VIBRATE
+android.permissions = BLUETOOTH, BLUETOOTH_ADMIN, BLUETOOTH_SCAN, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION
 android.api = 33
 android.minapi = 26
 android.archs = arm64-v8a
