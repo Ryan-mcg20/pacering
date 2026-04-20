@@ -55,7 +55,8 @@ android.add_compile_options = sourceCompatibility = JavaVersion.VERSION_11\ntarg
 android.logcat_filters = *:S python:D
 
 # Build backend
-p4a.branch = master
+# FIX: The 'develop' branch contains the patched build recipes to fix the clang-14 flag error
+p4a.branch = develop
 
 [buildozer]
 
