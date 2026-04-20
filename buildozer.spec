@@ -56,7 +56,7 @@ android.logcat_filters = *:S python:D
 
 # Build backend
 # FIX: The 'develop' branch contains the patched build recipes to fix the clang-14 flag error
-p4a.branch = develop
+p4a.branch = master
 
 [buildozer]
 
