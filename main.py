@@ -1,702 +1,699 @@
+cat > /mnt/user-data/outputs/main.py << 'ENDOFFILE'
 """
-PaceRing: Advanced Heart Rate & POTS Monitoring Application
------------------------------------------------------------
-This is a comprehensive, production-ready implementation featuring:
-- Asynchronous BLE (Bluetooth Low Energy) integration via Bleak
-- Local SQLite data persistence for historical tracking
-- Advanced realtime graphing with Kivy canvas instructions
-- Custom UI components with dynamic styling and animations
-- Stateful screen management and onboarding flows
+PaceRing v3.0 — Complete rebuilt UI
+Deep purple health monitoring app for POTS management
 """
 
-import asyncio
 import json
 import os
-import sqlite3
+import math
+import random
 from datetime import datetime
 from collections import deque
-import random
-import math
+from typing import Optional
 
 from kivy.app import App
+from kivy.uix.screenmanager import ScreenManager, Screen, SlideTransition, FadeTransition
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.floatlayout import FloatLayout
-from kivy.uix.anchorlayout import AnchorLayout
-from kivy.uix.screenmanager import ScreenManager, Screen, SlideTransition, FadeTransition
 from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
 from kivy.uix.slider import Slider
-from kivy.uix.popup import Popup
+from kivy.uix.widget import Widget
 from kivy.clock import Clock
 from kivy.core.window import Window
-from kivy.graphics import Color, RoundedRectangle, Line, Rectangle, Mesh
+from kivy.graphics import Color, RoundedRectangle, Line, Ellipse, Rectangle
 from kivy.animation import Animation
-from kivy.utils import get_color_from_hex
+from kivy.metrics import dp, sp
 
-# Try importing hardware specific libraries
-try:
-    from plyer import vibrator
-    HAS_VIBRATOR = True
-except ImportError:
-    HAS_VIBRATOR = False
+USE_SIMULATOR = True
 
-try:
-    from bleak import BleakScanner, BleakClient
-    HAS_BLEAK = True
-except ImportError:
-    HAS_BLEAK = False
+if USE_SIMULATOR:
+    from fake_ble import FakeBLEWorker as BLEWorker
+else:
+    from real_ble import RealBLEWorker as BLEWorker
 
-# =============================================================================
-# CONFIGURATION & CONSTANTS
-# =============================================================================
+from alert_engine import AlertEngine, AlertConfig, AlertEvent
 
-APP_VERSION = "2.1.0"
+# ── Palette ───────────────────────────────────────────────────────────────────
+BG         = (0.063, 0.051, 0.102, 1)    # #100d1a
+SURFACE    = (0.11,  0.09,  0.18,  1)    # card surface
+SURFACE2   = (0.16,  0.13,  0.25,  1)    # elevated surface
+PURPLE     = (0.42,  0.17,  0.91,  1)    # #6c2bea
+PURPLE2    = (0.31,  0.10,  0.67,  1)    # darker purple
+FUCHSIA    = (0.91,  0.475, 0.976, 1)    # #e879f9
+RED        = (0.957, 0.247, 0.369, 1)    # #f43f5e
+AMBER      = (0.96,  0.62,  0.04,  1)    # warning amber
+GREEN      = (0.30,  0.89,  0.40,  1)    # clear/safe
+WHITE      = (0.93,  0.91,  0.99,  1)    # near white
+MUTED      = (0.42,  0.37,  0.62,  1)    # muted text
+MUTED2     = (0.27,  0.23,  0.40,  1)    # very muted
+
 PROFILE_FILE = "pacering_profile.json"
-DB_FILE = "pacering_data.db"
-USE_SIMULATOR = not HAS_BLEAK  # Fallback to simulator if bleak is missing
 
-# BLE UUIDs standard for Heart Rate Service
-HR_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"
-HR_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 
-# Advanced Color Palette
-COLORS = {
-    "bg": get_color_from_hex("#100D1A"),          # Deep Navy/Purple Base
-    "surface": get_color_from_hex("#1E1630"),     # Elevated Surface
-    "surface_light": get_color_from_hex("#2D2147"),
-    "primary": get_color_from_hex("#6C2BEA"),     # Vibrant Purple
-    "primary_dark": get_color_from_hex("#4E1AAB"),
-    "text_main": get_color_from_hex("#EDE9FE"),   # Lavender White
-    "text_muted": get_color_from_hex("#6D5F9F"),  # Muted Purple
-    "accent": get_color_from_hex("#A78FE0"),      # Soft Lilac
-    "success": get_color_from_hex("#4CE366"),     # Vibrant Green
-    "warning": get_color_from_hex("#F59E0B"),     # Amber
-    "danger": get_color_from_hex("#F43F53"),      # Crimson Red
-    "transparent": (0, 0, 0, 0)
-}
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-FONTS = {
-    "h1": "32sp", "h2": "24sp", "h3": "18sp",
-    "body": "15sp", "small": "12sp", "micro": "10sp",
-    "giant": "96sp"
-}
+def save_profile(data: dict):
+    with open(PROFILE_FILE, "w") as f:
+        json.dump(data, f)
 
-# =============================================================================
-# DATA MANAGEMENT & ANALYTICS
-# =============================================================================
 
-class DatabaseManager:
-    """Handles local SQLite storage for historical HR data and spikes."""
-    def __init__(self):
-        self.conn = sqlite3.connect(DB_FILE)
-        self.cursor = self.conn.cursor()
-        self._init_db()
-
-    def _init_db(self):
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS hr_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                bpm INTEGER,
-                rmssd REAL,
-                status TEXT
-            )
-        ''')
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS spikes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                peak_bpm INTEGER,
-                duration_seconds INTEGER
-            )
-        ''')
-        self.conn.commit()
-
-    def log_heart_rate(self, bpm, rmssd, status):
-        self.cursor.execute('''
-            INSERT INTO hr_logs (bpm, rmssd, status) VALUES (?, ?, ?)
-        ''', (bpm, rmssd, status))
-        self.conn.commit()
-
-    def log_spike(self, peak_bpm, duration):
-        self.cursor.execute('''
-            INSERT INTO spikes (peak_bpm, duration_seconds) VALUES (?, ?)
-        ''', (peak_bpm, duration))
-        self.conn.commit()
-
-class HeartRateAnalyzer:
-    """Processes raw RR intervals into actionable metrics (HRV, RMSSD, Spikes)."""
-    def __init__(self, config):
-        self.config = config
-        self.rr_history = deque(maxlen=60)
-        self.bpm_history = deque(maxlen=300)
-        self.is_spiking = False
-        self.spike_start_time = None
-
-    def process_data(self, bpm, rr_intervals):
-        self.bpm_history.append(bpm)
-        for rr in rr_intervals:
-            self.rr_history.append(rr)
-
-        rmssd = self._calculate_rmssd()
-        status, alert_msg = self._check_thresholds(bpm)
-        return rmssd, status, alert_msg
-
-    def _calculate_rmssd(self):
-        if len(self.rr_history) < 2:
-            return 0.0
-        diffs = [self.rr_history[i] - self.rr_history[i-1] for i in range(1, len(self.rr_history))]
-        squared_diffs = [d**2 for d in diffs]
-        return math.sqrt(sum(squared_diffs) / len(squared_diffs)) * 1000 # Convert to ms
-
-    def _check_thresholds(self, bpm):
-        threshold = self.config.get("threshold", 110)
-        spike_delta = self.config.get("spike", 30)
-        resting = self.config.get("resting", 65)
-
-        if bpm >= threshold or (bpm - resting) >= spike_delta:
-            if not self.is_spiking:
-                self.is_spiking = True
-                self.spike_start_time = datetime.now()
-            return "DANGER", f"Spike detected: {bpm} BPM (+{bpm - resting} from resting)"
-        
-        elif self.is_spiking and bpm < (threshold - 10):
-            # Recovery phase
-            self.is_spiking = False
-            duration = (datetime.now() - self.spike_start_time).seconds if self.spike_start_time else 0
-            return "RECOVERY", f"Recovering. Spike lasted {duration}s."
-            
-        return "STABLE", ""
-
-# =============================================================================
-# BLUETOOTH INTEGRATION
-# =============================================================================
-
-class BLEManager:
-    """Asynchronous BLE Manager bridging Kivy and Bleak."""
-    def __init__(self, on_data_callback, on_status_callback):
-        self.on_data = on_data_callback
-        self.on_status = on_status_callback
-        self.client = None
-        self.is_running = False
-        self.loop = asyncio.get_event_loop()
-
-    async def connect_and_monitor(self):
-        self.is_running = True
-        self.on_status("Scanning for Heart Rate Monitors...")
-        
+def load_profile() -> Optional[dict]:
+    if os.path.exists(PROFILE_FILE):
         try:
-            devices = await BleakScanner.discover(timeout=5.0)
-            target_device = None
-            
-            # Look for devices advertising the HR service or common band names
-            for d in devices:
-                if d.name and ("band" in d.name.lower() or "hr" in d.name.lower() or "polar" in d.name.lower()):
-                    target_device = d
-                    break
+            return json.load(open(PROFILE_FILE))
+        except Exception:
+            pass
+    return None
 
-            if not target_device:
-                self.on_status("No band found. Make sure it's paired.")
-                self.is_running = False
-                return
 
-            self.on_status(f"Found {target_device.name}, connecting...")
-            
-            async with BleakClient(target_device.address) as client:
-                self.client = client
-                self.on_status("Connected. Authenticating...")
-                
-                await client.start_notify(HR_MEASUREMENT_UUID, self._notification_handler)
-                self.on_status("Monitoring Active")
-                
-                while self.is_running and client.is_connected:
-                    await asyncio.sleep(1.0)
-                    
-                await client.stop_notify(HR_MEASUREMENT_UUID)
-                self.on_status("Disconnected")
-                
-        except Exception as e:
-            self.on_status(f"BLE Error: {str(e)}")
-            self.is_running = False
+def time_greeting(name: str) -> str:
+    h = datetime.now().hour
+    if 6 <= h < 12:   prefix = "good morning"
+    elif 12 <= h < 17: prefix = "good afternoon"
+    elif 17 <= h < 21: prefix = "good evening"
+    else:              prefix = "hey, rest up"
+    return f"{prefix}, {name.lower()}"
 
-    def _notification_handler(self, sender, data):
-        # Decode GATT Heart Rate Measurement Characteristic
-        flags = data[0]
-        is_16_bit = flags & 0x01
-        rr_present = (flags >> 4) & 0x01
-        
-        bpm = int.from_bytes(data[1:3], "little") if is_16_bit else data[1]
-        
-        rr_intervals = []
-        if rr_present:
-            offset = 3 if is_16_bit else 2
-            for i in range(offset, len(data) - 1, 2):
-                # HR format gives RR in 1/1024 of a second
-                rr = int.from_bytes(data[i:i+2], "little") / 1024.0
-                rr_intervals.append(rr)
-                
-        # Send back to main Kivy thread
-        Clock.schedule_once(lambda dt: self.on_data(bpm, rr_intervals), 0)
 
-    def stop(self):
-        self.is_running = False
-
-# =============================================================================
-# CUSTOM UI WIDGETS
-# =============================================================================
-
-def apply_background(widget, color, radius=16, border_color=None, border_width=1):
-    """Utility to attach a responsive colored background to any widget."""
+def paint_bg(widget, color=None, radius=16):
+    """Attach a responsive rounded background to any widget."""
+    color = color or SURFACE
     with widget.canvas.before:
-        Color(*color)
-        rect = RoundedRectangle(pos=widget.pos, size=widget.size, radius=[radius])
-        line = None
-        if border_color:
-            Color(*border_color)
-            line = Line(rounded_rectangle=(widget.x, widget.y, widget.width, widget.height, radius), width=border_width)
+        col = Color(*color)
+        rect = RoundedRectangle(pos=widget.pos, size=widget.size, radius=[dp(radius)])
 
-    def _update_rect(instance, value):
-        rect.pos = instance.pos
-        rect.size = instance.size
-        if line:
-            line.rounded_rectangle = (instance.x, instance.y, instance.width, instance.height, radius)
+    def _update(*_):
+        rect.pos  = widget.pos
+        rect.size = widget.size
 
-    widget.bind(pos=_update_rect, size=_update_rect)
-    return rect
+    widget.bind(pos=_update, size=_update)
+    return rect, col
 
-class StyledButton(Button):
-    def __init__(self, text, style="primary", **kwargs):
-        super().__init__(**kwargs)
-        self.text = text
-        self.font_size = FONTS["body"]
-        self.bold = True
-        self.background_color = COLORS["transparent"]
-        self.background_normal = ""
-        self.size_hint_y = None
-        self.height = 56
-        
-        bg_color = COLORS["primary"] if style == "primary" else COLORS["surface"]
-        self.text_color = COLORS["text_main"] if style == "primary" else COLORS["text_muted"]
-        self.color = self.text_color
-        
-        apply_background(self, bg_color, radius=14)
-        
-        self.bind(state=self.on_state_change)
-        
-    def on_state_change(self, instance, value):
-        if value == "down":
-            self.color = COLORS["primary"]
+
+# ── Reusable widgets ──────────────────────────────────────────────────────────
+
+class PillLabel(BoxLayout):
+    """Small pill-shaped label with colored background."""
+    def __init__(self, text, bg=SURFACE2, text_color=MUTED, **kwargs):
+        super().__init__(size_hint=(None, None), size=(dp(120), dp(28)), **kwargs)
+        paint_bg(self, bg, radius=14)
+        self.lbl = Label(text=text, font_size=sp(12), color=text_color)
+        self.add_widget(self.lbl)
+
+    def set_text(self, text, color=None):
+        self.lbl.text = text
+        if color:
+            self.lbl.color = color
+
+
+class StatCard(BoxLayout):
+    def __init__(self, title, value, unit="", **kwargs):
+        super().__init__(orientation="vertical", padding=[dp(12), dp(10)], **kwargs)
+        paint_bg(self, SURFACE, radius=14)
+
+        self.val_lbl = Label(
+            text=value, font_size=sp(20), bold=True, color=WHITE,
+            size_hint_y=None, height=dp(32),
+        )
+        self.title_lbl = Label(
+            text=f"{title}" + (f"  {unit}" if unit else ""),
+            font_size=sp(11), color=MUTED,
+            size_hint_y=None, height=dp(18),
+        )
+        self.add_widget(self.val_lbl)
+        self.add_widget(self.title_lbl)
+
+    def update(self, value, color=None):
+        self.val_lbl.text = str(value)
+        if color:
+            self.val_lbl.color = color
+
+
+class StyledInput(TextInput):
+    def __init__(self, hint="", default="", numeric=False, **kwargs):
+        super().__init__(
+            hint_text=hint,
+            text=str(default),
+            multiline=False,
+            font_size=sp(17),
+            foreground_color=WHITE,
+            background_color=(0, 0, 0, 0),
+            hint_text_color=(*MUTED[:3], 0.7),
+            cursor_color=FUCHSIA,
+            selection_color=(*PURPLE[:3], 0.4),
+            padding=[dp(18), dp(14)],
+            size_hint_y=None,
+            height=dp(54),
+            **kwargs,
+        )
+        if numeric:
+            self.input_filter = "int"
+        paint_bg(self, SURFACE2, radius=12)
+
+
+class PurpleButton(Button):
+    def __init__(self, text, secondary=False, danger=False, **kwargs):
+        super().__init__(
+            text=text,
+            font_size=sp(16),
+            bold=True,
+            background_normal="",
+            background_color=(0, 0, 0, 0),
+            color=WHITE,
+            size_hint_y=None,
+            height=dp(54),
+            **kwargs,
+        )
+        if danger:
+            self._bg_color = RED
+        elif secondary:
+            self._bg_color = SURFACE2
         else:
-            self.color = self.text_color
+            self._bg_color = PURPLE
 
-class AdvancedGraphWidget(BoxLayout):
-    """A highly performant graph drawing a moving line with a gradient-like fill."""
+        paint_bg(self, self._bg_color, radius=14)
+
+        self.bind(state=self._on_state)
+
+    def _on_state(self, instance, state):
+        self.color = (*PURPLE[:3], 1) if state == "down" else WHITE
+
+
+class ECGGraph(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.history = []
-        self.max_points = 60
-        self.bind(pos=self.update_canvas, size=self.update_canvas)
+        self._pts = deque(maxlen=60)
+        self.bind(pos=self._draw, size=self._draw)
 
-    def update_data(self, data_list):
-        self.history = list(data_list)[-self.max_points:]
-        self.update_canvas()
+    def push(self, bpm: int):
+        self._pts.append(bpm)
+        self._draw()
 
-    def update_canvas(self, *args):
+    def _draw(self, *_):
         self.canvas.clear()
-        if len(self.history) < 2 or self.width == 0 or self.height == 0:
+        pts = list(self._pts)
+        if len(pts) < 2 or self.width < 2:
             return
+        lo = min(pts) - 5
+        hi = max(pts) + 5
+        if hi == lo:
+            hi = lo + 1
+        w, h = self.width, self.height
+        x0, y0 = self.pos
 
-        min_val = min(min(self.history) - 10, 50)
-        max_val = max(max(self.history) + 10, 150)
-        range_val = max_val - min_val
-
-        points = []
-        fill_vertices = []
-        fill_indices = []
-
-        step_x = self.width / max(1, (len(self.history) - 1))
-
-        # Bottom corners for the polygon fill
-        fill_vertices.extend([self.x, self.y, 0, 0])
-        fill_indices.append(0)
-
-        for i, val in enumerate(self.history):
-            px = self.x + (i * step_x)
-            py = self.y + ((val - min_val) / range_val) * self.height
-            points.extend([px, py])
-            
-            fill_vertices.extend([px, py, 0, 0])
-            fill_indices.append(i + 1)
-
-        # Complete the polygon back to bottom right
-        fill_vertices.extend([points[-2], self.y, 0, 0])
-        fill_indices.append(len(self.history) + 1)
+        coords = []
+        for i, v in enumerate(pts):
+            x = x0 + (i / (len(pts) - 1)) * w
+            y = y0 + ((v - lo) / (hi - lo)) * h
+            coords += [x, y]
 
         with self.canvas:
-            # Draw subtle grid lines
-            Color(*COLORS["surface_light"])
-            Line(points=[self.x, self.y + self.height/2, self.right, self.y + self.height/2], width=1)
-            
-            # Draw Fill Mesh (semi-transparent)
-            Color(COLORS["primary"][0], COLORS["primary"][1], COLORS["primary"][2], 0.2)
-            Mesh(vertices=fill_vertices, indices=fill_indices, mode='triangle_fan')
-            
-            # Draw actual line
-            Color(*COLORS["primary"])
-            Line(points=points, width=2, cap='round', joint='round')
+            # Faint fill polygon
+            Color(*PURPLE[:3], 0.15)
+            from kivy.graphics import Mesh
+            fill_v = [x0, y0, 0, 0]
+            for i in range(0, len(coords), 2):
+                fill_v += [coords[i], coords[i+1], 0, 0]
+            fill_v += [coords[-2], y0, 0, 0]
+            n = len(fill_v) // 4
+            Mesh(vertices=fill_v, indices=list(range(n)), mode="triangle_fan")
 
-# =============================================================================
-# SCREENS & FLOWS
-# =============================================================================
+            # Line
+            Color(*PURPLE)
+            Line(points=coords, width=dp(1.5), cap="round", joint="round")
 
-class BaseScreen(Screen):
-    """Base screen applying the standard app background."""
+            # Live dot
+            Color(*FUCHSIA)
+            r = dp(4)
+            Ellipse(pos=(coords[-2] - r, coords[-1] - r), size=(r*2, r*2))
+
+
+# ── Onboarding ────────────────────────────────────────────────────────────────
+
+class OnboardScreen(Screen):
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        apply_background(self, COLORS["bg"], radius=0)
+        super().__init__(name="onboard", **kwargs)
+        self._data = {}
+        self._build_step1()
 
-class OnboardingScreen(BaseScreen):
-    def __init__(self, on_complete, **kwargs):
-        super().__init__(name="onboarding", **kwargs)
-        self.on_complete = on_complete
-        self.step = 1
-        self.profile_data = {}
-        
-        self.main_layout = BoxLayout(orientation="vertical", padding=40, spacing=20)
-        self.add_widget(self.main_layout)
-        self.render_step_1()
-
-    def render_step_1(self):
-        self.main_layout.clear_widgets()
-        self.main_layout.add_widget(Label(text="step 1 of 3", color=COLORS["accent"], size_hint_y=None, height=30))
-        self.main_layout.add_widget(Label(text="What's your name?", font_size=FONTS["h1"], bold=True, color=COLORS["text_main"], size_hint_y=None, height=50))
-        self.main_layout.add_widget(Label(text="Personalize your experience.", color=COLORS["text_muted"], size_hint_y=None, height=30))
-        
-        self.name_input = TextInput(
-            hint_text="Enter your name", multiline=False, size_hint_y=None, height=60,
-            background_color=COLORS["surface"], foreground_color=COLORS["text_main"], 
-            padding=[20, 20], cursor_color=COLORS["primary"]
+    def _base_layout(self):
+        """Fresh vertical layout with standard padding."""
+        layout = BoxLayout(
+            orientation="vertical",
+            padding=[dp(32), dp(60), dp(32), dp(40)],
+            spacing=dp(16),
         )
-        self.main_layout.add_widget(self.name_input)
-        self.main_layout.add_widget(BoxLayout()) # Flexible spacer
-        
-        btn = StyledButton("Continue", style="primary")
-        btn.bind(on_press=self.process_step_1)
-        self.main_layout.add_widget(btn)
+        self.clear_widgets()
+        self.add_widget(layout)
+        return layout
 
-    def process_step_1(self, instance):
-        name = self.name_input.text.strip()
-        if not name:
-            name = "Friend"
-        self.profile_data["name"] = name
-        self.render_step_2()
+    def _step_label(self, layout, step, title, sub):
+        layout.add_widget(Label(
+            text=f"step {step} of 3",
+            font_size=sp(13), color=FUCHSIA,
+            size_hint_y=None, height=dp(22),
+            halign="left",
+        ))
+        layout.add_widget(Label(
+            text=title,
+            font_size=sp(28), bold=True, color=WHITE,
+            size_hint_y=None, height=dp(48),
+            halign="left",
+        ))
+        layout.add_widget(Label(
+            text=sub,
+            font_size=sp(14), color=MUTED,
+            size_hint_y=None, height=dp(24),
+            halign="left",
+        ))
 
-    def render_step_2(self):
-        self.main_layout.clear_widgets()
-        self.main_layout.add_widget(Label(text="step 2 of 3", color=COLORS["accent"], size_hint_y=None, height=30))
-        self.main_layout.add_widget(Label(text="Resting Heart Rate", font_size=FONTS["h1"], bold=True, size_hint_y=None, height=50))
-        
-        self.bpm_label = Label(text="65", font_size=FONTS["giant"], color=COLORS["primary"], bold=True, size_hint_y=None, height=120)
-        self.main_layout.add_widget(self.bpm_label)
-        
-        slider = Slider(min=40, max=100, value=65, step=1, size_hint_y=None, height=50, cursor_image='', cursor_size=(30,30))
-        slider.bind(value=lambda inst, val: setattr(self.bpm_label, 'text', str(int(val))))
-        self.main_layout.add_widget(slider)
-        
-        self.main_layout.add_widget(BoxLayout()) 
-        btn = StyledButton("Continue")
-        btn.bind(on_press=lambda inst: self.process_step_2(int(slider.value)))
-        self.main_layout.add_widget(btn)
+    # Step 1 — name
+    def _build_step1(self):
+        l = self._base_layout()
 
-    def process_step_2(self, resting_bpm):
-        self.profile_data["resting"] = resting_bpm
-        self.render_step_3()
+        # Logo / wordmark at top
+        l.add_widget(Label(
+            text="PaceRing",
+            font_size=sp(36), bold=True, color=FUCHSIA,
+            size_hint_y=None, height=dp(56),
+        ))
 
-    def render_step_3(self):
-        self.main_layout.clear_widgets()
-        self.main_layout.add_widget(Label(text="step 3 of 3", color=COLORS["accent"], size_hint_y=None, height=30))
-        self.main_layout.add_widget(Label(text="Spike Sensitivity", font_size=FONTS["h1"], bold=True, size_hint_y=None, height=50))
-        
-        self.spike_label = Label(text="+30 BPM", font_size=FONTS["h2"], color=COLORS["primary"], bold=True, size_hint_y=None, height=80)
-        self.main_layout.add_widget(self.spike_label)
-        
-        slider = Slider(min=15, max=60, value=30, step=5, size_hint_y=None, height=50)
-        slider.bind(value=lambda inst, val: setattr(self.spike_label, 'text', f"+{int(val)} BPM"))
-        self.main_layout.add_widget(slider)
-        
-        self.main_layout.add_widget(BoxLayout()) 
-        btn = StyledButton("Complete Setup")
-        btn.bind(on_press=lambda inst: self.finalize_setup(int(slider.value)))
-        self.main_layout.add_widget(btn)
+        self._step_label(l, 1, "What's your name?", "So we can make this feel like yours.")
 
-    def finalize_setup(self, spike_val):
-        self.profile_data["spike"] = spike_val
-        self.profile_data["threshold"] = self.profile_data["resting"] + spike_val
-        
-        with open(PROFILE_FILE, 'w') as f:
-            json.dump(self.profile_data, f)
-            
-        self.on_complete(self.profile_data)
+        self.name_input = StyledInput(hint="your name", default="")
+        l.add_widget(self.name_input)
+
+        l.add_widget(Widget())  # spacer
+
+        btn = PurpleButton("continue →")
+        btn.bind(on_press=self._from_step1)
+        l.add_widget(btn)
+
+    def _from_step1(self, *_):
+        name = self.name_input.text.strip() or "friend"
+        self._data["name"] = name
+        self._build_step2()
+
+    # Step 2 — resting HR slider
+    def _build_step2(self):
+        l = self._base_layout()
+        self._step_label(l, 2, "your resting\nheart rate", "used to detect spikes accurately")
+
+        # Big slider value display
+        val_row = BoxLayout(size_hint_y=None, height=dp(80), spacing=dp(40))
+        self._rest_val = Label(text="65", font_size=sp(48), bold=True, color=PURPLE)
+        self._thresh_val = Label(text="115", font_size=sp(48), bold=True, color=FUCHSIA)
+        val_row.add_widget(self._rest_val)
+        val_row.add_widget(self._thresh_val)
+        l.add_widget(val_row)
+
+        lbl_row = BoxLayout(size_hint_y=None, height=dp(20))
+        lbl_row.add_widget(Label(text="resting BPM", font_size=sp(12), color=MUTED))
+        lbl_row.add_widget(Label(text="alert above", font_size=sp(12), color=MUTED))
+        l.add_widget(lbl_row)
+
+        self.rest_slider = Slider(min=40, max=100, value=65, step=1,
+                                  size_hint_y=None, height=dp(50))
+        self.rest_slider.bind(value=self._update_rest)
+        l.add_widget(self.rest_slider)
+
+        l.add_widget(Label(
+            text="drag to set your resting BPM",
+            font_size=sp(12), color=MUTED,
+            size_hint_y=None, height=dp(20),
+        ))
+
+        l.add_widget(Widget())
+
+        btn = PurpleButton("continue →")
+        btn.bind(on_press=self._from_step2)
+        l.add_widget(btn)
+
+        skip = Button(
+            text="use defaults",
+            font_size=sp(13), color=MUTED,
+            background_normal="", background_color=(0,0,0,0),
+            size_hint_y=None, height=dp(36),
+        )
+        skip.bind(on_press=self._from_step2)
+        l.add_widget(skip)
+
+    def _update_rest(self, inst, val):
+        v = int(val)
+        self._rest_val.text = str(v)
+        self._thresh_val.text = str(v + 50)
+
+    def _from_step2(self, *_):
+        self._data["resting_hr"] = int(self.rest_slider.value)
+        self._data["threshold"]  = int(self.rest_slider.value) + 50
+        self._build_step3()
+
+    # Step 3 — spike sensitivity
+    def _build_step3(self):
+        l = self._base_layout()
+        self._step_label(l, 3, "spike sensitivity", "how fast does your HR rise during episodes?")
+
+        self._spike_lbl = Label(
+            text="+30 BPM",
+            font_size=sp(44), bold=True, color=FUCHSIA,
+            size_hint_y=None, height=dp(72),
+        )
+        l.add_widget(self._spike_lbl)
+
+        spike_slider = Slider(min=15, max=60, value=30, step=5,
+                              size_hint_y=None, height=dp(50))
+        spike_slider.bind(value=lambda i, v: setattr(self._spike_lbl, "text", f"+{int(v)} BPM"))
+        l.add_widget(spike_slider)
+
+        self._dur_lbl = Label(
+            text="alert after  10 s",
+            font_size=sp(16), color=WHITE,
+            size_hint_y=None, height=dp(36),
+        )
+        l.add_widget(self._dur_lbl)
+
+        dur_slider = Slider(min=5, max=30, value=10, step=5,
+                            size_hint_y=None, height=dp(50))
+        dur_slider.bind(value=lambda i, v: setattr(self._dur_lbl, "text", f"alert after  {int(v)} s"))
+        l.add_widget(dur_slider)
+
+        l.add_widget(Widget())
+
+        btn = PurpleButton("start monitoring")
+        btn.bind(on_press=lambda *_: self._finish(int(spike_slider.value), int(dur_slider.value)))
+        l.add_widget(btn)
+
+    def _finish(self, spike, dur):
+        self._data["spike_delta"]    = spike
+        self._data["sustained_secs"] = dur
+        save_profile(self._data)
+        app = App.get_running_app()
+        app.launch_monitor(self._data)
 
 
-class DashboardScreen(BaseScreen):
-    def __init__(self, profile, **kwargs):
-        super().__init__(name="dashboard", **kwargs)
-        self.profile = profile
-        self.db = DatabaseManager()
-        self.analyzer = HeartRateAnalyzer(self.profile)
-        self.history = deque(maxlen=60)
-        self.sim_event = None
-        self.ble_task = None
-        
-        self.build_ui()
+# ── Settings ──────────────────────────────────────────────────────────────────
 
-    def build_ui(self):
-        root = BoxLayout(orientation="vertical", padding=[25, 50, 25, 25], spacing=20)
-        
-        # --- HEADER ---
-        header = BoxLayout(size_hint_y=None, height=60)
-        greeting = self._get_greeting()
-        header_text = BoxLayout(orientation="vertical")
-        header_text.add_widget(Label(text=f"{greeting},", font_size=FONTS["body"], color=COLORS["text_muted"], halign="left", text_size=(Window.width, None)))
-        header_text.add_widget(Label(text=self.profile.get("name", "User"), font_size=FONTS["h2"], bold=True, color=COLORS["text_main"], halign="left", text_size=(Window.width, None)))
-        header.add_widget(header_text)
-        
-        settings_btn = Button(text="⚙", font_size="24sp", size_hint=(None, None), size=(50, 50), background_color=COLORS["transparent"], color=COLORS["text_muted"])
-        apply_background(settings_btn, COLORS["surface"], radius=25)
-        settings_btn.bind(on_press=lambda x: setattr(self.manager, 'current', 'settings'))
-        header.add_widget(settings_btn)
-        root.add_widget(header)
+class SettingsScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(name="settings", **kwargs)
+        self._build()
 
-        # --- STATUS PILL ---
-        self.status_pill = BoxLayout(size_hint=(None, None), size=(150, 30), pos_hint={'center_x': 0.5})
-        apply_background(self.status_pill, COLORS["surface_light"], radius=15)
-        self.status_label = Label(text="Disconnected", font_size=FONTS["micro"], color=COLORS["text_muted"])
-        self.status_pill.add_widget(self.status_label)
-        root.add_widget(self.status_pill)
+    def _build(self):
+        root = BoxLayout(
+            orientation="vertical",
+            padding=[dp(28), dp(56), dp(28), dp(32)],
+            spacing=dp(16),
+        )
 
-        # --- MAIN BPM DISPLAY ---
-        bpm_container = BoxLayout(orientation="vertical", size_hint_y=None, height=180)
-        self.bpm_val_label = Label(text="--", font_size=FONTS["giant"], bold=True, color=COLORS["text_main"])
-        self.bpm_sub_label = Label(text="BPM", font_size=FONTS["small"], color=COLORS["text_muted"], size_hint_y=None, height=20)
-        bpm_container.add_widget(self.bpm_val_label)
-        bpm_container.add_widget(self.bpm_sub_label)
-        root.add_widget(bpm_container)
+        # Header
+        hdr = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(12))
+        back = Button(
+            text="←", font_size=sp(22),
+            background_normal="", background_color=(0,0,0,0),
+            color=FUCHSIA, size_hint_x=None, width=dp(44),
+        )
+        back.bind(on_press=lambda *_: setattr(self.manager, "current", "monitor"))
+        hdr.add_widget(back)
+        hdr.add_widget(Label(text="settings", font_size=sp(22), bold=True, color=WHITE, halign="left"))
+        root.add_widget(hdr)
 
-        # --- GRAPH ---
-        graph_wrapper = BoxLayout(size_hint_y=None, height=120, padding=10)
-        apply_background(graph_wrapper, COLORS["surface"], radius=16)
-        self.graph = AdvancedGraphWidget()
-        graph_wrapper.add_widget(self.graph)
-        root.add_widget(graph_wrapper)
+        root.add_widget(Widget(size_hint_y=None, height=dp(8)))
 
-        # --- STATS ROW ---
-        stats_row = BoxLayout(size_hint_y=None, height=90, spacing=15)
-        
-        self.stat_rest = self._create_stat_card("Resting", str(self.profile.get("resting")), "BPM")
-        self.stat_hrv = self._create_stat_card("HRV (RMSSD)", "--", "ms")
-        self.stat_state = self._create_stat_card("State", "Clear", "")
-        
-        stats_row.add_widget(self.stat_rest)
-        stats_row.add_widget(self.stat_hrv)
-        stats_row.add_widget(self.stat_state)
-        root.add_widget(stats_row)
+        self._fields = {}
+        field_defs = [
+            ("name",           "your name",            False),
+            ("resting_hr",     "resting HR (BPM)",     True),
+            ("threshold",      "alert threshold (BPM)",True),
+            ("spike_delta",    "spike delta (+BPM)",   True),
+            ("sustained_secs", "sustained duration (s)",True),
+        ]
+        for key, label, numeric in field_defs:
+            root.add_widget(Label(
+                text=label, font_size=sp(12), color=MUTED,
+                size_hint_y=None, height=dp(20), halign="left",
+            ))
+            inp = StyledInput(hint=label, numeric=numeric)
+            self._fields[key] = inp
+            root.add_widget(inp)
 
-        # --- CONNECT BUTTON ---
-        root.add_widget(BoxLayout()) # Spacer
-        self.connect_btn = StyledButton("Connect Band", style="primary")
-        self.connect_btn.bind(on_press=self.toggle_connection)
-        root.add_widget(self.connect_btn)
+        root.add_widget(Widget())
+
+        save_btn = PurpleButton("save changes")
+        save_btn.bind(on_press=self._save)
+        root.add_widget(save_btn)
+
+        reset_btn = PurpleButton("reset profile", danger=True)
+        reset_btn.bind(on_press=self._reset)
+        root.add_widget(reset_btn)
 
         self.add_widget(root)
 
-    def _create_stat_card(self, title, val, unit):
-        card = BoxLayout(orientation="vertical", padding=10)
-        apply_background(card, COLORS["surface"], radius=12)
-        val_lbl = Label(text=val, font_size=FONTS["h3"], bold=True, color=COLORS["text_main"])
-        title_lbl = Label(text=f"{title} {unit}", font_size=FONTS["micro"], color=COLORS["text_muted"])
-        card.add_widget(val_lbl)
-        card.add_widget(title_lbl)
-        card.val_lbl = val_lbl # Store reference for updates
-        return card
+    def on_enter(self):
+        p = load_profile() or {}
+        for key, inp in self._fields.items():
+            inp.text = str(p.get(key, ""))
 
-    def _get_greeting(self):
-        hour = datetime.now().hour
-        if hour < 12: return "Good Morning"
-        if hour < 17: return "Good Afternoon"
-        return "Good Evening"
+    def _save(self, *_):
+        p = load_profile() or {}
+        for key, inp in self._fields.items():
+            p[key] = inp.text.strip()
+        save_profile(p)
+        self.manager.current = "monitor"
 
-    def update_ui_from_data(self, bpm, rr_intervals):
-        # Process logic
-        rmssd, status, alert_msg = self.analyzer.process_data(bpm, rr_intervals)
-        
-        # Logging
-        self.db.log_heart_rate(bpm, rmssd, status)
-        
-        # UI Updates
-        self.bpm_val_label.text = str(bpm)
-        self.stat_hrv.val_lbl.text = f"{int(rmssd)}" if rmssd > 0 else "--"
-        self.history.append(bpm)
-        self.graph.update_data(self.history)
-
-        # State Handling & Animations
-        if status == "DANGER":
-            self._trigger_alert_ui(bpm)
-        elif status == "RECOVERY":
-            self.stat_state.val_lbl.text = "Recovery"
-            self.stat_state.val_lbl.color = COLORS["warning"]
-            self.bpm_val_label.color = COLORS["warning"]
-        else:
-            self.stat_state.val_lbl.text = "Clear"
-            self.stat_state.val_lbl.color = COLORS["success"]
-            self.bpm_val_label.color = COLORS["text_main"]
-
-    def _trigger_alert_ui(self, bpm):
-        self.stat_state.val_lbl.text = "SPIKE"
-        self.stat_state.val_lbl.color = COLORS["danger"]
-        
-        # Pulse animation on BPM
-        anim = Animation(color=COLORS["danger"], duration=0.2) + Animation(color=COLORS["text_main"], duration=0.2)
-        anim.start(self.bpm_val_label)
-        
-        if HAS_VIBRATOR:
-            try:
-                vibrator.vibrate(time=0.5)
-            except Exception:
-                pass
-
-    def toggle_connection(self, instance):
-        if self.connect_btn.text == "Connect Band":
-            self.connect_btn.text = "Disconnect"
-            self.connect_btn.background_color = COLORS["surface"]
-            self.status_label.text = "Connecting..."
-            
-            if USE_SIMULATOR:
-                self.sim_event = Clock.schedule_interval(self._simulator_tick, 1.0)
-            else:
-                self.ble_manager = BLEManager(self.update_ui_from_data, self._update_ble_status)
-                self.ble_task = asyncio.create_task(self.ble_manager.connect_and_monitor())
-        else:
-            self.connect_btn.text = "Connect Band"
-            self.status_label.text = "Disconnected"
-            if self.sim_event:
-                self.sim_event.cancel()
-            if not USE_SIMULATOR and self.ble_manager:
-                self.ble_manager.stop()
-
-    def _update_ble_status(self, msg):
-        self.status_label.text = msg
-
-    def _simulator_tick(self, dt):
-        """Generates realistic synthetic HRV and BPM data."""
-        base_hr = self.profile.get("resting", 65)
-        
-        # 10% chance to simulate a POTS spike
-        if random.random() > 0.9:
-            val = base_hr + self.profile.get("spike", 30) + random.randint(-5, 15)
-        else:
-            val = base_hr + random.randint(-3, 8)
-            
-        # Generate synthetic RR intervals matching the BPM
-        rr_base = 60.0 / val
-        rr_intervals = [rr_base + random.uniform(-0.05, 0.05) for _ in range(random.randint(1, 3))]
-        
-        self.update_ui_from_data(val, rr_intervals)
-
-class SettingsScreen(BaseScreen):
-    def __init__(self, profile, **kwargs):
-        super().__init__(name="settings", **kwargs)
-        self.profile = profile
-        
-        layout = BoxLayout(orientation="vertical", padding=30, spacing=20)
-        
-        top = BoxLayout(size_hint_y=None, height=50)
-        back_btn = Button(text="< Back", font_size=FONTS["body"], size_hint_x=None, width=80, background_color=COLORS["transparent"], color=COLORS["primary"])
-        back_btn.bind(on_press=lambda x: setattr(self.manager, 'current', 'dashboard'))
-        top.add_widget(back_btn)
-        top.add_widget(Label(text="Settings", font_size=FONTS["h2"], bold=True, halign="right", text_size=(Window.width-140, None)))
-        layout.add_widget(top)
-        
-        # Profile Data Readonly list
-        for key, val in self.profile.items():
-            row = BoxLayout(size_hint_y=None, height=60, padding=[20, 0])
-            apply_background(row, COLORS["surface"], radius=10)
-            row.add_widget(Label(text=key.capitalize(), color=COLORS["text_muted"], halign="left"))
-            row.add_widget(Label(text=str(val), color=COLORS["text_main"], bold=True, halign="right"))
-            layout.add_widget(row)
-            
-        layout.add_widget(BoxLayout()) # Spacer
-        
-        reset_btn = StyledButton("Reset Profile", style="secondary")
-        reset_btn.color = COLORS["danger"]
-        reset_btn.bind(on_press=self.reset_app)
-        layout.add_widget(reset_btn)
-        
-        self.add_widget(layout)
-
-    def reset_app(self, instance):
+    def _reset(self, *_):
         if os.path.exists(PROFILE_FILE):
             os.remove(PROFILE_FILE)
-        if os.path.exists(DB_FILE):
-            os.remove(DB_FILE)
         App.get_running_app().stop()
 
-# =============================================================================
-# MAIN APP ARCHITECTURE
-# =============================================================================
+
+# ── Monitor screen ────────────────────────────────────────────────────────────
+
+class MonitorScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(name="monitor", **kwargs)
+        self.ble_worker = None
+        self._alert_up  = False
+        self._build_ui()
+
+    def _build_ui(self):
+        root = FloatLayout()
+
+        # Main scrollable column
+        col = BoxLayout(
+            orientation="vertical",
+            padding=[dp(24), dp(52), dp(24), dp(24)],
+            spacing=dp(14),
+            size_hint=(1, 1),
+        )
+
+        # ── Row 1: Greeting + settings ──
+        top = BoxLayout(size_hint_y=None, height=dp(44))
+        self.greeting_lbl = Label(
+            text="", font_size=sp(14), color=MUTED,
+            halign="left", valign="middle", size_hint_x=0.85,
+        )
+        self.greeting_lbl.bind(size=lambda w, _: setattr(w, "text_size", w.size))
+        top.add_widget(self.greeting_lbl)
+
+        gear = Button(
+            text="☰", font_size=sp(18),
+            background_normal="", background_color=(0,0,0,0),
+            color=FUCHSIA, size_hint=(None, None), size=(dp(40), dp(40)),
+        )
+        gear.bind(on_press=lambda *_: setattr(self.manager, "current", "settings"))
+        top.add_widget(gear)
+        col.add_widget(top)
+
+        # ── Row 2: Status pill ──
+        self.status_pill = PillLabel("not connected", bg=SURFACE2, text_color=MUTED)
+        status_anchor = BoxLayout(size_hint_y=None, height=dp(32))
+        status_anchor.add_widget(self.status_pill)
+        status_anchor.add_widget(Widget())
+        col.add_widget(status_anchor)
+
+        # ── Row 3: BPM number ──
+        bpm_box = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None, height=dp(110),
+        )
+        self.bpm_lbl = Label(
+            text="--",
+            font_size=sp(82), bold=True, color=WHITE,
+            size_hint_y=None, height=dp(90),
+        )
+        self.bpm_unit = Label(
+            text="BPM",
+            font_size=sp(14), color=MUTED,
+            size_hint_y=None, height=dp(20),
+        )
+        bpm_box.add_widget(self.bpm_lbl)
+        bpm_box.add_widget(self.bpm_unit)
+        col.add_widget(bpm_box)
+
+        # ── Row 4: HRV pill ──
+        self.hrv_lbl = Label(
+            text="HRV  —",
+            font_size=sp(14), color=FUCHSIA,
+            size_hint_y=None, height=dp(24),
+        )
+        col.add_widget(self.hrv_lbl)
+
+        # ── Row 5: Graph ──
+        graph_card = BoxLayout(size_hint_y=None, height=dp(90), padding=dp(12))
+        paint_bg(graph_card, SURFACE, radius=16)
+        self.graph = ECGGraph()
+        graph_card.add_widget(self.graph)
+        col.add_widget(graph_card)
+
+        # ── Row 6: Stat cards ──
+        stats = BoxLayout(size_hint_y=None, height=dp(78), spacing=dp(10))
+        self.card_rest   = StatCard("resting", "--", "BPM")
+        self.card_hrv    = StatCard("avg HRV", "--", "ms")
+        self.card_status = StatCard("status", "idle")
+        stats.add_widget(self.card_rest)
+        stats.add_widget(self.card_hrv)
+        stats.add_widget(self.card_status)
+        col.add_widget(stats)
+
+        # ── Row 7: Alert card (hidden) ──
+        self.alert_card = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None, height=0,
+            padding=[dp(16), dp(0)],
+            opacity=0,
+        )
+        paint_bg(self.alert_card, (0.22, 0.05, 0.10, 1), radius=16)
+        self.alert_lbl = Label(
+            text="", font_size=sp(13), color=(1, 0.55, 0.60, 1),
+            halign="center", valign="middle",
+        )
+        self.alert_lbl.bind(size=lambda w, _: setattr(w, "text_size", (w.width - dp(24), None)))
+        self.alert_card.add_widget(self.alert_lbl)
+        col.add_widget(self.alert_card)
+
+        # ── Row 8: Connect button ──
+        col.add_widget(Widget())  # push button down
+        self.connect_btn = PurpleButton("connect to band")
+        self.connect_btn.bind(on_press=self._start)
+        col.add_widget(self.connect_btn)
+
+        root.add_widget(col)
+        self.add_widget(root)
+
+    def on_enter(self):
+        p = load_profile()
+        if p:
+            self.greeting_lbl.text = time_greeting(p.get("name", ""))
+            self.card_rest.update(str(p.get("resting_hr", "--")))
+        Clock.schedule_interval(self._tick_greeting, 60)
+
+    def _tick_greeting(self, *_):
+        p = load_profile()
+        if p:
+            self.greeting_lbl.text = time_greeting(p.get("name", ""))
+
+    def _start(self, *_):
+        self.connect_btn.disabled = True
+        self.connect_btn.text = "connecting..."
+        p = load_profile() or {}
+        config = AlertConfig(
+            sustained_hr_threshold=int(p.get("threshold", 110)),
+            sustained_duration_secs=int(p.get("sustained_secs", 10)),
+            spike_bpm_delta=int(p.get("spike_delta", 30)),
+            spike_window_secs=30,
+        )
+        self.ble_worker = BLEWorker(
+            on_bpm=self._on_bpm,
+            on_status=self._on_status,
+            on_alert=self._on_alert,
+            scenario="pots_spike",
+        )
+        self.ble_worker.alert_engine = AlertEngine(config)
+        self.ble_worker.start()
+
+    def _on_status(self, txt: str):
+        self.status_pill.set_text(txt)
+        connected = any(x in txt.lower() for x in ["connected", "simulator", "monitoring"])
+        self.status_pill.lbl.color = GREEN if connected else MUTED
+        if connected:
+            self.card_status.update("live", GREEN)
+
+    def _on_bpm(self, bpm: int, rmssd: Optional[float]):
+        self.bpm_lbl.text = str(bpm)
+        self.graph.push(bpm)
+
+        # Colour
+        if bpm < 90:
+            c = WHITE
+        elif bpm < 110:
+            c = AMBER
+        else:
+            c = RED
+        self.bpm_lbl.color = c
+
+        # Subtle pulse
+        anim = Animation(font_size=sp(86), duration=0.08) + Animation(font_size=sp(82), duration=0.18)
+        anim.start(self.bpm_lbl)
+
+        if rmssd:
+            self.hrv_lbl.text = f"HRV  {rmssd:.0f} ms"
+            self.card_hrv.update(f"{rmssd:.0f}", FUCHSIA)
+
+        # Auto-dismiss alert on recovery
+        if bpm < 95 and self._alert_up:
+            self._dismiss_alert()
+
+    def _on_alert(self, alert: AlertEvent):
+        self._alert_up = True
+        self.alert_lbl.text = f"⚠  {alert.message}"
+        self.alert_card.opacity = 1
+        Animation(height=dp(88), duration=0.3).start(self.alert_card)
+        self.card_status.update("ALERT", RED)
+
+        try:
+            from plyer import vibrator
+            vibrator.vibrate(time=1.5)
+        except Exception:
+            pass
+
+    def _dismiss_alert(self, *_):
+        self._alert_up = False
+        self.card_status.update("live", GREEN)
+        anim = Animation(height=0, opacity=0, duration=0.22)
+        anim.start(self.alert_card)
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
 
 class PaceRingApp(App):
     def build(self):
-        Window.clearcolor = COLORS["bg"]
-        self.sm = ScreenManager(transition=FadeTransition())
-        
-        # Load profile or start onboarding
-        profile = self.load_profile()
-        if profile:
-            self.sm.add_widget(DashboardScreen(profile=profile))
-            self.sm.add_widget(SettingsScreen(profile=profile))
-            self.sm.current = "dashboard"
+        Window.clearcolor = BG
+        self.sm = ScreenManager(transition=FadeTransition(duration=0.2))
+        p = load_profile()
+        if p:
+            self._add_monitor_screens(p)
+            self.sm.current = "monitor"
         else:
-            self.sm.add_widget(OnboardingScreen(on_complete=self.finish_onboarding))
-            self.sm.current = "onboarding"
-            
+            self.sm.add_widget(OnboardScreen())
+            self.sm.current = "onboard"
         return self.sm
 
-    def load_profile(self):
-        if os.path.exists(PROFILE_FILE):
-            try:
-                with open(PROFILE_FILE, 'r') as f:
-                    return json.load(f)
-            except Exception:
-                return None
-        return None
-
-    def finish_onboarding(self, profile):
-        self.sm.add_widget(DashboardScreen(profile=profile))
-        self.sm.add_widget(SettingsScreen(profile=profile))
+    def launch_monitor(self, profile):
+        self._add_monitor_screens(profile)
         self.sm.transition = SlideTransition(direction="left")
-        self.sm.current = "dashboard"
+        self.sm.current = "monitor"
 
-# =============================================================================
-# ENTRY POINT WITH ASYNCIO INTEGRATION
-# =============================================================================
+    def _add_monitor_screens(self, profile):
+        if not self.sm.has_screen("monitor"):
+            self.sm.add_widget(MonitorScreen())
+        if not self.sm.has_screen("settings"):
+            self.sm.add_widget(SettingsScreen())
+
 
 if __name__ == "__main__":
-    # If using bleak, we must run the Kivy app inside an asyncio event loop
-    if HAS_BLEAK:
-        loop = asyncio.get_event_loop()
-        app = PaceRingApp()
-        
-        async def run_kivy(app):
-            await app.async_run()
-            
-        try:
-            loop.run_until_complete(run_kivy(app))
-        except KeyboardInterrupt:
-            pass
-        finally:
-            loop.close()
-    else:
-        # Standard synchronous fallback if Bleak is not installed
-        PaceRingApp().run()
+    PaceRingApp().run()
+ENDOFFILE
+echo "Done"
