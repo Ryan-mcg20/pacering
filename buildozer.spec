@@ -22,7 +22,7 @@ orientation = portrait
 # Android API targets
 android.minapi = 26
 android.api = 34
-android.ndk = 23b
+android.ndk = 25b
 android.sdk = 34
 
 # Permissions
@@ -56,7 +56,7 @@ android.logcat_filters = *:S python:D
 
 # Build backend
 # FIX: The 'develop' branch contains the patched build recipes to fix the clang-14 flag error
-p4a.branch = master
+p4a.branch = develop
 
 [buildozer]
 
