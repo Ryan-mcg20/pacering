@@ -30,6 +30,7 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.slider import Slider
 from kivy.uix.widget import Widget
 from kivy.uix.popup import Popup
+from kivy.uix.image import Image
 from kivy.graphics import (
     Color, Rectangle, RoundedRectangle, Line, Ellipse,
     PushMatrix, PopMatrix, Scale, Translate, Mesh,
@@ -220,6 +221,105 @@ class HeartWidget(Widget):
         if self._pulse_event:
             self._pulse_event.cancel()
             self._pulse_event = None
+
+
+class PumpingHeartLayer(FloatLayout):
+    """
+    Composite heart background:
+    - optional realistic PNG heart if provided in assets/
+    - vector heart fallback/highlight
+    - pulse animation synced to BPM
+    """
+    pulse_scale = NumericProperty(1.0)
+    pulse_y = NumericProperty(0.0)
+    glow_alpha = NumericProperty(0.08)
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._bpm = 65
+        self._pulse_event = None
+        self._base_size = dp(280)
+        self._heart_source = os.path.join("assets", "heart_realistic_bg.png")
+        self._has_real_heart = os.path.exists(self._heart_source)
+
+        with self.canvas.before:
+            self._glow_col = Color(0.93, 0.38, 0.46, self.glow_alpha)
+            self._glow = Ellipse(pos=self.pos, size=(dp(40), dp(40)))
+
+        self._heart_img = Image(
+            source=self._heart_source if self._has_real_heart else "",
+            allow_stretch=True,
+            keep_ratio=True,
+            opacity=0.72 if self._has_real_heart else 0.0,
+            size_hint=(None, None),
+            size=(self._base_size, self._base_size),
+            pos_hint={"center_x": 0.5, "center_y": 0.57},
+        )
+        self.add_widget(self._heart_img)
+
+        self._vector_heart = HeartWidget(
+            size_hint=(None, None),
+            size=(self._base_size * 0.95, self._base_size * 0.95),
+            pos_hint={"center_x": 0.5, "center_y": 0.57},
+            opacity=0.22 if self._has_real_heart else 0.82,
+        )
+        self.add_widget(self._vector_heart)
+
+        self.bind(
+            pos=self._layout_heart,
+            size=self._layout_heart,
+            pulse_scale=self._layout_heart,
+            pulse_y=self._layout_heart,
+            glow_alpha=self._layout_heart,
+        )
+        self._layout_heart()
+
+    def _layout_heart(self, *_):
+        base = min(self.width, self.height) * 0.66
+        size = max(dp(190), base) * self.pulse_scale
+        cx = self.x + self.width * 0.5
+        cy = self.y + self.height * 0.57 + self.pulse_y
+        for w, ratio in ((self._heart_img, 1.0), (self._vector_heart, 0.95)):
+            w.size = (size * ratio, size * ratio)
+            w.pos = (cx - w.width / 2, cy - w.height / 2)
+        glow_w = size * 1.28
+        glow_h = size * 0.92
+        self._glow.pos = (cx - glow_w / 2, cy - glow_h / 2 - dp(4))
+        self._glow.size = (glow_w, glow_h)
+        self._glow_col.a = self.glow_alpha
+
+    def set_bpm(self, bpm):
+        bpm = max(40, min(200, int(bpm)))
+        self._bpm = bpm
+        self._vector_heart.set_bpm(bpm)
+        if self._pulse_event:
+            self._pulse_event.cancel()
+        self._pulse_event = Clock.schedule_interval(self._pulse_tick, 60.0 / bpm)
+
+    def _pulse_tick(self, _dt):
+        cycle = 60.0 / max(40, self._bpm)
+        # Lifelike cycle:
+        # - fast systolic squeeze/expand
+        # - short rebound notch
+        # - smooth diastolic settle
+        up = max(0.08, cycle * 0.23)
+        notch = max(0.05, cycle * 0.13)
+        settle = max(0.10, cycle * 0.48)
+        amp = 1.11 if self._has_real_heart else 1.08
+        ykick = dp(5) if self._has_real_heart else dp(3)
+        glow_peak = 0.20 if self._has_real_heart else 0.14
+        anim = (
+            Animation(pulse_scale=amp, pulse_y=ykick, glow_alpha=glow_peak, duration=up, t="out_cubic")
+            + Animation(pulse_scale=0.985, pulse_y=-ykick * 0.45, glow_alpha=0.10, duration=notch, t="in_out_quad")
+            + Animation(pulse_scale=1.0, pulse_y=0.0, glow_alpha=0.08, duration=settle, t="out_sine")
+        )
+        anim.start(self)
+
+    def stop(self):
+        if self._pulse_event:
+            self._pulse_event.cancel()
+            self._pulse_event = None
+        self._vector_heart.stop()
 
 
 # ── BPM Graph ──────────────────────────────────────────────────────────────────
@@ -650,12 +750,8 @@ class MonitorScreen(Screen):
         root = FloatLayout()
         _screen_bg(root)
 
-        # Heart background — large, centered, behind everything
-        self.heart = HeartWidget(
-            size_hint=(None, None), size=(dp(260), dp(260)),
-            pos_hint={"center_x": 0.5, "center_y": 0.62},
-            opacity=0.35,
-        )
+        # Heart background — realistic asset + vector fallback, BPM-synced pulse
+        self.heart = PumpingHeartLayer(size_hint=(1, 1))
         root.add_widget(self.heart)
 
         # Main content column (on top of heart)
@@ -675,6 +771,13 @@ class MonitorScreen(Screen):
             size=lambda w, _: setattr(w, "text_size", (w.width, None))
         )
         top.add_widget(self.greeting_lbl)
+
+        self.sim_toggle_btn = GhostButton(
+            text=f"sim: {'on' if USE_SIMULATOR else 'off'}",
+            size_hint=(None, 1), width=dp(88), color=STATUS_GRN if USE_SIMULATOR else STATUS_RED
+        )
+        self.sim_toggle_btn.bind(on_release=self._toggle_simulator)
+        top.add_widget(self.sim_toggle_btn)
 
         self.initial_btn = Button(
             size_hint=(None, None), size=(dp(40), dp(40)),
@@ -1106,6 +1209,13 @@ class MonitorScreen(Screen):
         Animation(y=-dp(200), duration=0.1).start(self._alert_card)
         self._start_sim(btn._sc)
 
+    def _toggle_simulator(self, *_):
+        global USE_SIMULATOR
+        USE_SIMULATOR = not USE_SIMULATOR
+        self.sim_toggle_btn.text = f"sim: {'on' if USE_SIMULATOR else 'off'}"
+        self.sim_toggle_btn.color = STATUS_GRN if USE_SIMULATOR else STATUS_RED
+        self.status_lbl.text = "simulator enabled" if USE_SIMULATOR else "bluetooth mode enabled"
+
 
 # ── Weekly Summary Screen ──────────────────────────────────────────────────────
 
@@ -1174,7 +1284,7 @@ class SummaryScreen(Screen):
         )
         avg_card.add_widget(avg_bpm_lbl)
         avg_card.add_widget(Label(
-            text="bmp", font_size=sp(14), color=TEXT_MUTED,
+            text="bpm", font_size=sp(14), color=TEXT_MUTED,
             size_hint=(None, None), size=(dp(40), dp(24)),
             pos_hint={"x": 0.38, "center_y": 0.38},
         ))
@@ -1401,6 +1511,16 @@ class SettingsScreen(Screen):
         self._rows.bind(minimum_height=self._rows.setter("height"))
         col.add_widget(self._rows)
 
+        col.add_widget(Widget(size_hint_y=None, height=dp(12)))
+        controls = GridLayout(cols=2, spacing=dp(10), size_hint_y=None, height=dp(54))
+        self.sim_btn = PurpleButton(text="simulator on" if USE_SIMULATOR else "simulator off", height=dp(52))
+        self.sim_btn.bind(on_release=self._toggle_simulator)
+        dev_btn = GhostButton(text="developer mode", height=dp(52))
+        dev_btn.bind(on_release=self._open_developer_mode)
+        controls.add_widget(self.sim_btn)
+        controls.add_widget(dev_btn)
+        col.add_widget(controls)
+
         col.add_widget(Widget())
 
         back2 = PurpleButton(text="back to monitor")
@@ -1438,6 +1558,16 @@ class SettingsScreen(Screen):
     def _back(self, *_):
         self.manager.transition = SlideTransition(direction="right")
         self.manager.current = "monitor"
+
+    def _toggle_simulator(self, *_):
+        global USE_SIMULATOR
+        USE_SIMULATOR = not USE_SIMULATOR
+        self.sim_btn.text = "simulator on" if USE_SIMULATOR else "simulator off"
+        self.on_enter()
+
+    def _open_developer_mode(self, *_):
+        monitor = App.get_running_app().root.get_screen("monitor")
+        monitor._open_dev_mode()
 
 
 # ── App ────────────────────────────────────────────────────────────────────────
