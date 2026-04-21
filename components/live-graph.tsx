@@ -10,16 +10,30 @@ interface LiveGraphProps {
 
 export function LiveGraph({ bpm, className }: LiveGraphProps) {
   const [points, setPoints] = useState<number[]>([]);
+  const [isMounted, setIsMounted] = useState(false);
   const svgWidth = 400;
   const svgHeight = 100;
   const maxPoints = 60;
-  const animationRef = useRef<number | undefined>(undefined);
+  const animationRef = useRef<number | null>(null);
   const lastUpdateRef = useRef<number>(0);
+  const isMountedRef = useRef(true);
 
   useEffect(() => {
+    setIsMounted(true);
+    return () => {
+      setIsMounted(false);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isMounted) return;
+    
+    isMountedRef.current = true;
     const updateInterval = 60000 / bpm / 4; // Update 4 times per heartbeat
 
     const animate = (timestamp: number) => {
+      if (!isMountedRef.current) return;
+      
       if (timestamp - lastUpdateRef.current >= updateInterval) {
         lastUpdateRef.current = timestamp;
 
@@ -68,11 +82,20 @@ export function LiveGraph({ bpm, className }: LiveGraphProps) {
     animationRef.current = requestAnimationFrame(animate);
 
     return () => {
+      isMountedRef.current = false;
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [bpm]);
+  }, [bpm, isMounted]);
+
+  if (!isMounted) {
+    return (
+      <div className={className}>
+        <div className="w-full h-full bg-white/5 rounded animate-pulse" />
+      </div>
+    );
+  }
 
   const pathD = points
     .map((point, index) => {

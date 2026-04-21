@@ -1,7 +1,7 @@
 "use client";
 
-import { motion, useAnimation } from "framer-motion";
-import { useEffect } from "react";
+import { motion } from "framer-motion";
+import { useEffect, useState, useRef } from "react";
 
 interface AnatomicalHeartProps {
   bpm: number;
@@ -9,44 +9,59 @@ interface AnatomicalHeartProps {
 }
 
 export function AnatomicalHeart({ bpm, size = 280 }: AnatomicalHeartProps) {
-  const controls = useAnimation();
+  const [scale, setScale] = useState(1);
+  const animationRef = useRef<number | null>(null);
+  const isMountedRef = useRef(true);
 
   useEffect(() => {
-    const beatDuration = 60 / bpm;
+    isMountedRef.current = true;
+    const beatDuration = (60 / bpm) * 1000; // in ms
 
-    const lubDubAnimation = async () => {
-      while (true) {
-        // Lub - quick contraction
-        await controls.start({
-          scale: 0.9,
-          transition: { duration: 0.08, ease: "easeIn" },
-        });
-        // Dub - elastic rebound
-        await controls.start({
-          scale: 1.15,
-          transition: { duration: 0.12, ease: "easeOut" },
-        });
-        // Settle back
-        await controls.start({
-          scale: 1.0,
-          transition: { duration: beatDuration - 0.2, ease: "easeInOut" },
-        });
+    let phase = 0;
+    let lastTime = performance.now();
+
+    const animate = (currentTime: number) => {
+      if (!isMountedRef.current) return;
+
+      const elapsed = currentTime - lastTime;
+      phase += elapsed;
+
+      // Lub-Dub cycle
+      const cyclePosition = (phase % beatDuration) / beatDuration;
+
+      let newScale: number;
+      if (cyclePosition < 0.1) {
+        // Lub - quick contraction (0-10%)
+        newScale = 1 - 0.1 * (cyclePosition / 0.1);
+      } else if (cyclePosition < 0.25) {
+        // Dub - elastic rebound (10-25%)
+        const reboundProgress = (cyclePosition - 0.1) / 0.15;
+        newScale = 0.9 + 0.25 * reboundProgress;
+      } else {
+        // Settle back (25-100%)
+        const settleProgress = (cyclePosition - 0.25) / 0.75;
+        newScale = 1.15 - 0.15 * settleProgress;
       }
+
+      setScale(newScale);
+      lastTime = currentTime;
+      animationRef.current = requestAnimationFrame(animate);
     };
 
-    lubDubAnimation();
+    animationRef.current = requestAnimationFrame(animate);
 
     return () => {
-      controls.stop();
+      isMountedRef.current = false;
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
     };
-  }, [bpm, controls]);
+  }, [bpm]);
 
   return (
     <motion.div
-      animate={controls}
-      initial={{ scale: 1 }}
       className="relative heart-glow"
-      style={{ width: size, height: size }}
+      style={{ width: size, height: size, transform: `scale(${scale})` }}
     >
       <svg
         viewBox="0 0 100 100"
