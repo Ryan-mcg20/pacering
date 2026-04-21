@@ -241,7 +241,7 @@ class BottomNav(BoxLayout):
             )
             if is_active:
                 with btn.canvas.before:
-                    Color(*PRIMARY_C, 0.12)
+                    Color(*PRIMARY_C[:3], 0.12)
                     rr = RoundedRectangle(pos=btn.pos, size=btn.size, radius=[dp(8)])
                 btn.bind(
                     pos=lambda b, _: setattr(rr, "pos", b.pos),
@@ -1144,7 +1144,7 @@ class MonitorScreen(Screen):
         card.y = -dp(200)
         draw_card(card, CARD_HIGH, radius=20)
         with card.canvas.before:
-            Color(*PRIMARY_C, 0.4)
+            Color(*PRIMARY_C[:3], 0.4)
             Line(rounded_rectangle=[card.x, card.y, card.width, card.height, dp(20)],
                  width=dp(1.2))
 
@@ -1487,7 +1487,7 @@ class SummaryScreen(Screen):
         with hrv_card.canvas.before:
             Color(*CARD)
             hrv_bg = RoundedRectangle(pos=hrv_card.pos, size=hrv_card.size, radius=[dp(14)])
-            Color(*PRIMARY_C, 0.8)
+            Color(*PRIMARY_C[:3], 0.8)
             hrv_lb = Line(
                 points=[hrv_card.x, hrv_card.y + dp(14),
                         hrv_card.x, hrv_card.top - dp(14)],
